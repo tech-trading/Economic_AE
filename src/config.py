@@ -45,6 +45,13 @@ class Settings:
     momentum_weight: float = float(os.getenv("MOMENTUM_WEIGHT", "1.0"))
     momentum_mode: str = os.getenv("MOMENTUM_MODE", "weighted")
 
+    # Donchian breakout strategy parameters
+    donchian_lookback_seconds: int = int(os.getenv("DONCHIAN_LOOKBACK_SECONDS", "600"))
+    donchian_breakout_buffer_pips: float = float(os.getenv("DONCHIAN_BREAKOUT_BUFFER_PIPS", "0.2"))
+    donchian_min_channel_pips: float = float(os.getenv("DONCHIAN_MIN_CHANNEL_PIPS", "1.0"))
+    donchian_confirm_ticks: int = int(os.getenv("DONCHIAN_CONFIRM_TICKS", "1"))
+    donchian_trigger_quantile: float = float(os.getenv("DONCHIAN_TRIGGER_QUANTILE", "0.80"))
+
     data_dir: str = os.getenv("DATA_DIR", "data")
     model_dir: str = os.getenv("MODEL_DIR", "models")
     events_csv: str = os.getenv("EVENTS_CSV", "data/events.csv")

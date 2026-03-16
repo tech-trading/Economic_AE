@@ -863,6 +863,16 @@ def main() -> None:
                     "MOMENTUM_MODE": env_vals.get("MOMENTUM_MODE", "weighted"),
                 }
             )
+        elif strategy_mode == "donchian":
+            st.json(
+                {
+                    "DONCHIAN_LOOKBACK_SECONDS": parse_int(env_vals.get("DONCHIAN_LOOKBACK_SECONDS"), 600),
+                    "DONCHIAN_BREAKOUT_BUFFER_PIPS": parse_float(env_vals.get("DONCHIAN_BREAKOUT_BUFFER_PIPS"), 0.2),
+                    "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
+                    "DONCHIAN_CONFIRM_TICKS": parse_int(env_vals.get("DONCHIAN_CONFIRM_TICKS"), 1),
+                    "DONCHIAN_TRIGGER_QUANTILE": parse_float(env_vals.get("DONCHIAN_TRIGGER_QUANTILE"), 0.80),
+                }
+            )
         else:
             st.caption("Usando estrategia base de ensemble (tabular + LSTM cuando esté disponible).")
 
@@ -901,8 +911,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum"],
-            index=["default", "zscore", "momentum"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum"] else 0,
+            options=["default", "zscore", "momentum", "donchian"],
+            index=["default", "zscore", "momentum", "donchian"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
@@ -960,6 +970,43 @@ def main() -> None:
             "MOMENTUM_MODE",
             options=["weighted", "conjunctive"],
             index=0 if (env_vals.get("MOMENTUM_MODE", "weighted") == "weighted") else 1,
+        )
+
+        don_lookback = st.number_input(
+            "DONCHIAN_LOOKBACK_SECONDS",
+            min_value=60,
+            max_value=14400,
+            value=parse_int(env_vals.get("DONCHIAN_LOOKBACK_SECONDS"), 600),
+            step=30,
+        )
+        don_buffer = st.number_input(
+            "DONCHIAN_BREAKOUT_BUFFER_PIPS",
+            min_value=0.0,
+            max_value=20.0,
+            value=parse_float(env_vals.get("DONCHIAN_BREAKOUT_BUFFER_PIPS"), 0.2),
+            step=0.1,
+        )
+        don_channel = st.number_input(
+            "DONCHIAN_MIN_CHANNEL_PIPS",
+            min_value=0.5,
+            max_value=100.0,
+            value=parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
+            step=0.5,
+        )
+        don_confirm = st.number_input(
+            "DONCHIAN_CONFIRM_TICKS",
+            min_value=1,
+            max_value=20,
+            value=parse_int(env_vals.get("DONCHIAN_CONFIRM_TICKS"), 1),
+            step=1,
+        )
+        don_quantile = st.number_input(
+            "DONCHIAN_TRIGGER_QUANTILE",
+            min_value=0.55,
+            max_value=0.95,
+            value=parse_float(env_vals.get("DONCHIAN_TRIGGER_QUANTILE"), 0.80),
+            step=0.01,
+            format="%.2f",
         )
         label_mode = st.selectbox(
             "Modo de etiquetado",
@@ -1025,6 +1072,11 @@ def main() -> None:
             env_vals["MOMENTUM_THRESHOLD"] = f"{float(mom_threshold):.6f}"
             env_vals["MOMENTUM_WEIGHT"] = f"{float(mom_weight):.4f}"
             env_vals["MOMENTUM_MODE"] = mom_mode
+            env_vals["DONCHIAN_LOOKBACK_SECONDS"] = str(int(don_lookback))
+            env_vals["DONCHIAN_BREAKOUT_BUFFER_PIPS"] = f"{float(don_buffer):.2f}"
+            env_vals["DONCHIAN_MIN_CHANNEL_PIPS"] = f"{float(don_channel):.2f}"
+            env_vals["DONCHIAN_CONFIRM_TICKS"] = str(int(don_confirm))
+            env_vals["DONCHIAN_TRIGGER_QUANTILE"] = f"{float(don_quantile):.2f}"
             env_vals["DIRECTION_LABEL_MODE"] = label_mode
             env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
             env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"

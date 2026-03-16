@@ -9,6 +9,8 @@ from src.mt5_executor import TradeDecision
 
 
 class Strategy:
+    requires_models: bool = True
+
     def decide(self, event_row: pd.Series, ticks: pd.DataFrame, bundle: Any, tabular_models, lstm_model, feature_columns, policy: dict, settings) -> TradeDecision | None:  # pragma: no cover - simple interface
         raise NotImplementedError()
 
@@ -171,11 +173,127 @@ class MomentumStrategy(Strategy):
         return TradeDecision(side=side, confidence=confidence, proba_buy=float(proba_buy))
 
 
+class DonchianBreakoutStrategy(Strategy):
+    requires_models: bool = False
+
+    def __init__(
+        self,
+        lookback_seconds: int = 600,
+        breakout_buffer_pips: float = 0.2,
+        min_channel_pips: float = 1.0,
+        confirm_ticks: int = 1,
+        trigger_quantile: float = 0.80,
+    ):
+        self.lookback_seconds = lookback_seconds
+        self.breakout_buffer_pips = breakout_buffer_pips
+        self.min_channel_pips = min_channel_pips
+        self.confirm_ticks = max(1, int(confirm_ticks))
+        self.trigger_quantile = float(np.clip(trigger_quantile, 0.55, 0.95))
+
+    @staticmethod
+    def _pip_size(symbol: str) -> float:
+        sym = str(symbol or "").upper()
+        return 0.01 if "JPY" in sym else 0.0001
+
+    def _window(self, ticks: pd.DataFrame) -> pd.DataFrame:
+        if ticks is None or ticks.empty:
+            return pd.DataFrame()
+
+        df = ticks
+        if "time_utc" in df.columns:
+            times = df["time_utc"]
+            if not times.is_monotonic_increasing:
+                df = df.sort_values("time_utc")
+                times = df["time_utc"]
+
+            utc_to = times.iat[-1]
+            start_time = utc_to - pd.Timedelta(seconds=self.lookback_seconds)
+            start_idx = int(times.searchsorted(start_time, side="left"))
+            out = df.iloc[start_idx:]
+            if out.empty:
+                return df.tail(max(30, self.confirm_ticks + 5))
+            return out
+
+        return df.tail(300)
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        window = self._window(ticks)
+        if window.empty or len(window) < max(6, self.confirm_ticks + 3):
+            return None
+
+        mid = ((window["bid"].astype(float) + window["ask"].astype(float)) / 2.0).dropna()
+        if len(mid) < max(6, self.confirm_ticks + 3):
+            return None
+
+        pivot = mid.iloc[:-self.confirm_ticks] if len(mid) > self.confirm_ticks else mid
+        if pivot.empty:
+            return None
+
+        high = float(pivot.max())
+        low = float(pivot.min())
+        latest_block = mid.tail(self.confirm_ticks)
+        latest = float(latest_block.iat[-1])
+
+        pip = self._pip_size(getattr(settings, "symbol", "EURUSD"))
+        buffer = float(self.breakout_buffer_pips) * pip
+        channel_width = max(1e-12, high - low)
+        channel_pips = channel_width / pip
+        if channel_pips < float(self.min_channel_pips):
+            return None
+
+        buy_break = bool((latest_block > (high + buffer)).all())
+        sell_break = bool((latest_block < (low - buffer)).all())
+        channel_pos = float(np.clip((latest - low) / channel_width, 0.0, 1.0))
+        buy_zone = channel_pos >= self.trigger_quantile
+        sell_zone = channel_pos <= (1.0 - self.trigger_quantile)
+
+        if not buy_break and not sell_break:
+            buy_break = buy_zone
+            sell_break = sell_zone
+
+        if buy_break == sell_break:
+            return None
+
+        ema_fast = float(mid.ewm(span=20, adjust=False).mean().iat[-1])
+        ema_slow = float(mid.ewm(span=50, adjust=False).mean().iat[-1])
+
+        trend_factor = 1.0
+        if buy_break:
+            if ema_fast <= ema_slow:
+                trend_factor = 0.95
+            distance = max(0.0, latest - (high + buffer))
+            side = "BUY"
+            direction = 1.0
+        else:
+            if ema_fast >= ema_slow:
+                trend_factor = 0.95
+            distance = max(0.0, (low - buffer) - latest)
+            side = "SELL"
+            direction = -1.0
+
+        strength = float(distance / channel_width)
+        edge_strength = max(strength, abs(channel_pos - 0.5) * 2.0)
+        confidence = float(np.clip((0.55 + min(0.35, edge_strength * 0.45)) * trend_factor, 0.55, 0.93))
+        if confidence < float(policy.get("decision_threshold", 0.5)):
+            return None
+
+        proba_buy = float(np.clip(0.5 + direction * min(0.49, 0.28 + strength), 0.01, 0.99))
+        return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
+
+
 def get_strategy(name: str, settings, policy: dict) -> Strategy:
     name = (name or "").strip().lower()
     if name == "zscore" or name == "z_score" or name == "z-score":
         return ZScoreStrategy(lookback_seconds=int(settings.z_score_lookback_seconds), z_threshold=float(settings.z_score_threshold), z_weight=float(settings.z_weight), mode=settings.z_combination_mode)
     if name == "momentum" or name == "mom":
         return MomentumStrategy(lookback_seconds=int(settings.momentum_lookback_seconds), momentum_threshold=float(settings.momentum_threshold), momentum_weight=float(settings.momentum_weight), mode=settings.momentum_mode)
+    if name in {"donchian", "breakout", "turtle", "donchian_breakout"}:
+        return DonchianBreakoutStrategy(
+            lookback_seconds=int(settings.donchian_lookback_seconds),
+            breakout_buffer_pips=float(settings.donchian_breakout_buffer_pips),
+            min_channel_pips=float(settings.donchian_min_channel_pips),
+            confirm_ticks=int(settings.donchian_confirm_ticks),
+            trigger_quantile=float(settings.donchian_trigger_quantile),
+        )
     # default fallback
     return DefaultStrategy()

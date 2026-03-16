@@ -29,7 +29,7 @@ class LiveTrader:
         # strategy selection
         self.strategy = get_strategy(settings.strategy, settings, self.policy)
 
-        if not self.tabular_models and self.lstm_model is None:
+        if self.strategy.requires_models and not self.tabular_models and self.lstm_model is None:
             raise RuntimeError("No models loaded. Train first.")
 
     def run(self) -> None:
@@ -104,7 +104,7 @@ class LiveTrader:
 
         event_df = pd.DataFrame([event_row.to_dict()])
         bundle = build_event_dataset(event_df, ticks, lookback_seconds=settings.lookback_seconds)
-        if bundle.X_tabular.empty:
+        if self.strategy.requires_models and bundle.X_tabular.empty:
             return None
         # delegate to selected strategy
         return self.strategy.decide(event_row, ticks, bundle, self.tabular_models, self.lstm_model, self.feature_columns, self.policy, settings)

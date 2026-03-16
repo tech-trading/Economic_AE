@@ -71,7 +71,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     results = {}
-    for name in ['default', 'zscore', 'momentum']:
+    for name in ['default', 'zscore', 'momentum', 'donchian']:
         print('Running', name)
         try:
             df = run_for_strategy(name, bundle, ticks, tabular, lstm, feat_cols)

@@ -11,7 +11,7 @@ $desktopPath = [Environment]::GetFolderPath("Desktop")
 $shortcutPath = Join-Path $desktopPath ("{0}.lnk" -f $ShortcutName)
 $iconDir = Join-Path $projectRoot "assets"
 $iconPath = Join-Path $iconDir "app_icon.ico"
-$streamlitFavicon = Join-Path $projectRoot ".venv311\Lib\site-packages\streamlit\static\favicon.png"
+$streamlitFavicon = Join-Path $projectRoot ".venv\Lib\site-packages\streamlit\static\favicon.png"
 
 if (-not (Test-Path $startupScript)) {
     Write-Host "No se encontro el script de inicio: $startupScript" -ForegroundColor Red

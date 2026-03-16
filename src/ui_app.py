@@ -110,9 +110,11 @@ def start_live_bot_process() -> tuple[bool, str]:
     if existing_pid:
         return False, f"Ya existe un bot LIVE ejecutándose (PID {existing_pid})."
 
-    python_path = PROJECT_ROOT / ".venv311/Scripts/python.exe"
+    python_path = PROJECT_ROOT / ".venv/Scripts/python.exe"
     if not python_path.exists():
-        return False, "No se encontró .venv311/Scripts/python.exe"
+        python_path = Path(sys.executable)
+    if not python_path.exists():
+        return False, "No se encontró Python para iniciar LIVE (.venv o sys.executable)."
 
     os.makedirs(LIVE_PID_PATH.parent, exist_ok=True)
     env = os.environ.copy()
@@ -820,11 +822,12 @@ def main() -> None:
     utc_offset_hours = parse_float(env_vals.get("UTC_OFFSET_HOURS"), -5.0)
     ny_latam_preset_default = parse_bool(env_vals.get("NY_LATAM_PRESET_DEFAULT"), False)
     paper_mode = parse_bool(env_vals.get("PAPER_TRADING"), settings.paper_trading)
+    strategy_mode = (env_vals.get("STRATEGY") or getattr(settings, "strategy", "default") or "default").strip().lower()
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Modo de ejecución", "PAPER" if paper_mode else "LIVE")
     m2.metric("Símbolo", env_vals.get("SYMBOL", settings.symbol))
-    m3.metric("Offset horario", f"UTC{utc_offset_hours:+g}")
+    m3.metric("Estrategia", strategy_mode)
     if paper_mode:
         st.warning("Actualmente estás en PAPER mode. Cambia a LIVE en Configuración para operar real.")
     else:
@@ -839,6 +842,29 @@ def main() -> None:
         c1.metric("Events CSV", "OK" if (PROJECT_ROOT / "data/events.csv").exists() else "Missing")
         c2.metric("Market CSV", "OK" if (PROJECT_ROOT / "data/market_ticks.csv").exists() else "Missing")
         c3.metric("Models", "OK" if (PROJECT_ROOT / "models/metadata.json").exists() else "Missing")
+
+        st.subheader("Estrategia activa")
+        st.write(f"Modo actual: **{strategy_mode}**")
+        if strategy_mode == "zscore":
+            st.json(
+                {
+                    "Z_SCORE_LOOKBACK_SECONDS": parse_int(env_vals.get("Z_SCORE_LOOKBACK_SECONDS"), 300),
+                    "Z_SCORE_THRESHOLD": parse_float(env_vals.get("Z_SCORE_THRESHOLD"), 0.7),
+                    "Z_WEIGHT": parse_float(env_vals.get("Z_WEIGHT"), 1.0),
+                    "Z_COMBINATION_MODE": env_vals.get("Z_COMBINATION_MODE", "weighted"),
+                }
+            )
+        elif strategy_mode == "momentum":
+            st.json(
+                {
+                    "MOMENTUM_LOOKBACK_SECONDS": parse_int(env_vals.get("MOMENTUM_LOOKBACK_SECONDS"), 300),
+                    "MOMENTUM_THRESHOLD": parse_float(env_vals.get("MOMENTUM_THRESHOLD"), 0.0005),
+                    "MOMENTUM_WEIGHT": parse_float(env_vals.get("MOMENTUM_WEIGHT"), 1.0),
+                    "MOMENTUM_MODE": env_vals.get("MOMENTUM_MODE", "weighted"),
+                }
+            )
+        else:
+            st.caption("Usando estrategia base de ensemble (tabular + LSTM cuando esté disponible).")
 
         st.subheader("Último summary de walk-forward")
         summary = read_if_exists(PROJECT_ROOT / "models/walkforward_summary.json")
@@ -872,6 +898,68 @@ def main() -> None:
             options=["false", "true"],
             index=0 if env_vals.get("PAPER_TRADING", "true").lower() == "false" else 1,
             help="false = LIVE real, true = PAPER pruebas.",
+        )
+        strategy = st.selectbox(
+            "Estrategia de decisión",
+            options=["default", "zscore", "momentum"],
+            index=["default", "zscore", "momentum"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum"] else 0,
+            help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
+        )
+
+        st.markdown("### Parámetros de estrategia")
+        z_lookback = st.number_input(
+            "Z_SCORE_LOOKBACK_SECONDS",
+            min_value=30,
+            max_value=7200,
+            value=parse_int(env_vals.get("Z_SCORE_LOOKBACK_SECONDS"), 300),
+            step=10,
+        )
+        z_threshold = st.number_input(
+            "Z_SCORE_THRESHOLD",
+            min_value=0.0,
+            max_value=10.0,
+            value=parse_float(env_vals.get("Z_SCORE_THRESHOLD"), 0.7),
+            step=0.1,
+        )
+        z_weight = st.number_input(
+            "Z_WEIGHT",
+            min_value=0.0,
+            max_value=10.0,
+            value=parse_float(env_vals.get("Z_WEIGHT"), 1.0),
+            step=0.1,
+        )
+        z_mode = st.selectbox(
+            "Z_COMBINATION_MODE",
+            options=["weighted", "conjunctive"],
+            index=0 if (env_vals.get("Z_COMBINATION_MODE", "weighted") == "weighted") else 1,
+        )
+
+        mom_lookback = st.number_input(
+            "MOMENTUM_LOOKBACK_SECONDS",
+            min_value=30,
+            max_value=7200,
+            value=parse_int(env_vals.get("MOMENTUM_LOOKBACK_SECONDS"), 300),
+            step=10,
+        )
+        mom_threshold = st.number_input(
+            "MOMENTUM_THRESHOLD",
+            min_value=0.0,
+            max_value=0.05,
+            value=parse_float(env_vals.get("MOMENTUM_THRESHOLD"), 0.0005),
+            step=0.0001,
+            format="%.4f",
+        )
+        mom_weight = st.number_input(
+            "MOMENTUM_WEIGHT",
+            min_value=0.0,
+            max_value=10.0,
+            value=parse_float(env_vals.get("MOMENTUM_WEIGHT"), 1.0),
+            step=0.1,
+        )
+        mom_mode = st.selectbox(
+            "MOMENTUM_MODE",
+            options=["weighted", "conjunctive"],
+            index=0 if (env_vals.get("MOMENTUM_MODE", "weighted") == "weighted") else 1,
         )
         label_mode = st.selectbox(
             "Modo de etiquetado",
@@ -928,6 +1016,15 @@ def main() -> None:
             env_vals["DECISION_THRESHOLD"] = threshold
             env_vals["NO_TRADE_BAND"] = no_trade
             env_vals["PAPER_TRADING"] = paper
+            env_vals["STRATEGY"] = strategy
+            env_vals["Z_SCORE_LOOKBACK_SECONDS"] = str(int(z_lookback))
+            env_vals["Z_SCORE_THRESHOLD"] = f"{float(z_threshold):.4f}"
+            env_vals["Z_WEIGHT"] = f"{float(z_weight):.4f}"
+            env_vals["Z_COMBINATION_MODE"] = z_mode
+            env_vals["MOMENTUM_LOOKBACK_SECONDS"] = str(int(mom_lookback))
+            env_vals["MOMENTUM_THRESHOLD"] = f"{float(mom_threshold):.6f}"
+            env_vals["MOMENTUM_WEIGHT"] = f"{float(mom_weight):.4f}"
+            env_vals["MOMENTUM_MODE"] = mom_mode
             env_vals["DIRECTION_LABEL_MODE"] = label_mode
             env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
             env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"
@@ -1115,7 +1212,7 @@ def main() -> None:
             st.rerun()
 
         st.markdown("### Comando de arranque LIVE")
-        st.code("$env:PAPER_TRADING='false'; .\\.venv311\\Scripts\\python.exe -m src.main")
+        st.code("$env:PAPER_TRADING='false'; .\\.venv\\Scripts\\python.exe -m src.main")
         if not live_armed:
             st.caption("El comando se muestra, pero la ejecución LIVE requiere armado activo y checklist completo.")
         else:

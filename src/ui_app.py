@@ -1,0 +1,1157 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import signal
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+from dotenv import dotenv_values
+
+from src.model_registry import list_snapshots, restore_snapshot, snapshot_current_models
+from src.config import settings
+from src.mt5_executor import MT5Executor
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_PATH = PROJECT_ROOT / ".env"
+LIVE_PID_PATH = PROJECT_ROOT / "logs/live_bot.pid"
+
+
+def load_env() -> dict[str, str]:
+    if not ENV_PATH.exists():
+        return {}
+    data = dotenv_values(str(ENV_PATH))
+    return {str(k): str(v) for k, v in data.items() if k is not None and v is not None}
+
+
+def save_env(values: dict[str, str]) -> None:
+    lines = [f"{k}={v}" for k, v in values.items()]
+    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_module(module: str, extra_env: dict[str, str] | None = None) -> tuple[int, str]:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
+    cmd = [sys.executable, "-m", module]
+    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True)
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    return proc.returncode, output.strip()
+
+
+def read_if_exists(path: Path, n: int = 200) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+    return "\n".join(lines[:n])
+
+
+def load_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def parse_int(value: str | None, default: int) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def parse_float(value: str | None, default: float) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def parse_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def get_live_bot_pid() -> int | None:
+    if not LIVE_PID_PATH.exists():
+        return None
+    try:
+        pid = int(LIVE_PID_PATH.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+    return pid if _is_pid_running(pid) else None
+
+
+def start_live_bot_process() -> tuple[bool, str]:
+    existing_pid = get_live_bot_pid()
+    if existing_pid:
+        return False, f"Ya existe un bot LIVE ejecutándose (PID {existing_pid})."
+
+    python_path = PROJECT_ROOT / ".venv311/Scripts/python.exe"
+    if not python_path.exists():
+        return False, "No se encontró .venv311/Scripts/python.exe"
+
+    os.makedirs(LIVE_PID_PATH.parent, exist_ok=True)
+    env = os.environ.copy()
+    env["PAPER_TRADING"] = "false"
+
+    try:
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
+        proc = subprocess.Popen(
+            [str(python_path), "-m", "src.main"],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+        )
+        LIVE_PID_PATH.write_text(str(proc.pid), encoding="utf-8")
+        return True, f"Bot LIVE iniciado (PID {proc.pid})."
+    except Exception as ex:
+        return False, f"No se pudo iniciar el bot LIVE: {ex}"
+
+
+def stop_live_bot_process() -> tuple[bool, str]:
+    pid = get_live_bot_pid()
+    if not pid:
+        if LIVE_PID_PATH.exists():
+            LIVE_PID_PATH.unlink(missing_ok=True)
+        return False, "No hay bot LIVE activo registrado."
+
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
+        else:
+            os.kill(pid, signal.SIGTERM)
+        LIVE_PID_PATH.unlink(missing_ok=True)
+        return True, f"Bot LIVE detenido (PID {pid})."
+    except Exception as ex:
+        return False, f"No se pudo detener el bot LIVE: {ex}"
+
+
+def verify_mt5_connection() -> tuple[bool, str]:
+    executor = MT5Executor()
+    try:
+        executor.initialize()
+        return True, "Conexión MT5 verificada correctamente."
+    except Exception as ex:
+        return False, f"MT5 no disponible: {ex}"
+    finally:
+        try:
+            executor.shutdown()
+        except Exception:
+            pass
+
+
+def render_walkforward_charts(report_path: Path) -> None:
+    report = load_csv(report_path)
+    if report.empty:
+        st.info("No hay reporte de walk-forward para graficar.")
+        return
+
+    period_col = "month" if "month" in report.columns else ("week" if "week" in report.columns else "split")
+    plot_df = report[[period_col, "hit_rate", "avg_r", "max_drawdown_r", "num_trades"]].copy()
+    plot_df = plot_df.set_index(period_col)
+
+    st.markdown("#### Rendimiento por periodo")
+    st.line_chart(plot_df[["hit_rate", "avg_r"]])
+    st.bar_chart(plot_df[["num_trades", "max_drawdown_r"]])
+
+
+def render_paper_trade_charts(
+    paper_path: Path,
+    widget_prefix: str,
+    min_signals_sem: int,
+    min_edge_sem: float,
+    min_conf_sem: float,
+    utc_offset_hours: float,
+    ny_latam_preset_default: bool,
+) -> None:
+    paper = load_csv(paper_path)
+    if paper.empty:
+        st.info("No hay registros de ejecución para graficar.")
+        return
+
+    required_cols = {"time_utc", "side", "confidence"}
+    if not required_cols.issubset(set(paper.columns)):
+        st.warning("El archivo de registros no tiene todas las columnas requeridas: time_utc, side, confidence")
+        return
+
+    paper["time_utc"] = pd.to_datetime(paper["time_utc"], utc=True, errors="coerce")
+    paper = paper.dropna(subset=["time_utc"]).sort_values("time_utc")
+    if paper.empty:
+        st.info("Los registros no tienen timestamps válidos.")
+        return
+
+    st.markdown("#### Filtros")
+    min_date = paper["time_utc"].dt.date.min()
+    max_date = paper["time_utc"].dt.date.max()
+    date_range = st.date_input(
+        "Rango de fechas",
+        value=(min_date, max_date),
+        min_value=min_date,
+        max_value=max_date,
+        key=f"{widget_prefix}_date_range",
+    )
+
+    side_options = sorted(paper["side"].astype(str).str.upper().dropna().unique().tolist())
+    selected_sides = st.multiselect(
+        "Sides",
+        options=side_options,
+        default=side_options,
+        key=f"{widget_prefix}_sides",
+    )
+
+    if "event_currency" in paper.columns:
+        cur_options = sorted(paper["event_currency"].astype(str).dropna().unique().tolist())
+        selected_currencies = st.multiselect(
+            "Monedas de evento",
+            options=cur_options,
+            default=cur_options,
+            key=f"{widget_prefix}_currencies",
+        )
+    else:
+        selected_currencies = []
+
+    if "event_importance" in paper.columns:
+        imp_options = sorted(paper["event_importance"].astype(str).dropna().unique().tolist())
+        selected_importance = st.multiselect(
+            "Importancia",
+            options=imp_options,
+            default=imp_options,
+            key=f"{widget_prefix}_importance",
+        )
+    else:
+        selected_importance = []
+
+    event_query = st.text_input("Buscar evento", value="", key=f"{widget_prefix}_event_query")
+    use_ny_latam_preset = st.toggle(
+        "Aplicar ventana operativa NY/LATAM",
+        value=ny_latam_preset_default,
+        key=f"{widget_prefix}_ny_latam_preset",
+        help="Filtra automáticamente horas líquidas locales, eventos de mayor relevancia y monedas objetivo.",
+    )
+
+    filtered = paper.copy()
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+        filtered = filtered[
+            (filtered["time_utc"].dt.date >= start_date)
+            & (filtered["time_utc"].dt.date <= end_date)
+        ]
+    if selected_sides:
+        filtered = filtered[filtered["side"].astype(str).str.upper().isin(selected_sides)]
+    if selected_currencies and "event_currency" in filtered.columns:
+        filtered = filtered[filtered["event_currency"].astype(str).isin(selected_currencies)]
+    if selected_importance and "event_importance" in filtered.columns:
+        filtered = filtered[filtered["event_importance"].astype(str).isin(selected_importance)]
+    if event_query.strip() and "event_name" in filtered.columns:
+        filtered = filtered[
+            filtered["event_name"].astype(str).str.contains(event_query.strip(), case=False, na=False)
+        ]
+
+    if use_ny_latam_preset:
+        offset = pd.Timedelta(hours=float(utc_offset_hours))
+        filtered["local_hour"] = (filtered["time_utc"] + offset).dt.hour
+        filtered = filtered[(filtered["local_hour"] >= 7) & (filtered["local_hour"] <= 17)]
+
+        if "event_importance" in filtered.columns:
+            imp_numeric = pd.to_numeric(filtered["event_importance"], errors="coerce")
+            filtered = filtered[imp_numeric.fillna(0) >= 2]
+
+        if "event_currency" in filtered.columns:
+            target_ccy = {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "NZD", "CHF", "MXN", "BRL", "CLP"}
+            filtered = filtered[filtered["event_currency"].astype(str).str.upper().isin(target_ccy)]
+
+        st.caption(
+            f"Preset NY/LATAM activo: hora local UTC{utc_offset_hours:+g} entre 07:00-17:59, importancia >=2 y monedas objetivo."
+        )
+
+    if filtered.empty:
+        st.info("No hay señales con los filtros seleccionados.")
+        return
+
+    filtered["side_upper"] = filtered["side"].astype(str).str.upper()
+    filtered["signal"] = filtered["side_upper"].map({"BUY": 1, "SELL": -1}).fillna(0)
+    filtered["signal_weighted"] = filtered["signal"] * filtered["confidence"].fillna(0.0)
+    filtered["signal_cum"] = filtered["signal_weighted"].cumsum()
+    filtered["hour"] = filtered["time_utc"].dt.hour
+    if "proba_buy" in filtered.columns:
+        proba_buy = pd.to_numeric(filtered["proba_buy"], errors="coerce").fillna(0.5)
+        filtered["edge_proxy"] = np.where(filtered["side_upper"] == "BUY", proba_buy, 1.0 - proba_buy)
+    else:
+        filtered["edge_proxy"] = filtered["confidence"].fillna(0.0)
+
+    st.markdown("#### KPIs")
+    c1, c2, c3, c4 = st.columns(4)
+    total_signals = int(len(filtered))
+    net_bias = float(filtered["signal"].sum())
+    avg_conf = float(filtered["confidence"].fillna(0.0).mean())
+    top_hour = int(filtered["hour"].mode().iloc[0]) if not filtered["hour"].mode().empty else -1
+    c1.metric("Total señales", total_signals)
+    c2.metric("Sesgo neto (BUY-SELL)", f"{net_bias:.0f}")
+    c3.metric("Confianza media", f"{avg_conf:.3f}")
+    c4.metric("Hora pico (UTC)", "N/A" if top_hour < 0 else str(top_hour))
+
+    st.markdown("#### Semáforo de recomendación")
+    st.caption(
+        f"Umbrales activos: min_signals={min_signals_sem}, min_edge={min_edge_sem:.2f}, min_conf={min_conf_sem:.2f}"
+    )
+    time_focus = st.selectbox(
+        "Ventana recomendación",
+        options=["Todo historial", "Solo hoy", "Próximas 24h"],
+        index=0,
+        key=f"{widget_prefix}_time_focus",
+    )
+    use_local_day = st.checkbox(
+        f"Usar día local (UTC{utc_offset_hours:+g}) para 'Solo hoy'",
+        value=True,
+        key=f"{widget_prefix}_use_local_day",
+    )
+
+    rec_df = filtered.copy()
+    ref_col = "event_time_utc" if "event_time_utc" in rec_df.columns else "time_utc"
+    rec_df[ref_col] = pd.to_datetime(rec_df[ref_col], utc=True, errors="coerce")
+    rec_df = rec_df.dropna(subset=[ref_col])
+    now_utc = pd.Timestamp.now(tz="UTC")
+    if time_focus == "Solo hoy":
+        if use_local_day:
+            offset = pd.Timedelta(hours=float(utc_offset_hours))
+            rec_local_date = (rec_df[ref_col] + offset).dt.date
+            now_local_date = (now_utc + offset).date()
+            rec_df = rec_df[rec_local_date == now_local_date]
+        else:
+            rec_df = rec_df[rec_df[ref_col].dt.date == now_utc.date()]
+    elif time_focus == "Próximas 24h":
+        rec_df = rec_df[(rec_df[ref_col] >= now_utc) & (rec_df[ref_col] <= now_utc + pd.Timedelta(hours=24))]
+
+    if rec_df.empty:
+        st.info("La ventana temporal seleccionada no contiene datos para recomendación.")
+        rec_df = filtered.copy()
+
+    def classify_row(row: pd.Series) -> str:
+        hard_fail = (
+            row.get("signals", 0) < max(1, int(min_signals_sem * 0.6))
+            or row.get("edge_proxy_mean", 0.0) < min_edge_sem - 0.05
+            or row.get("confidence_mean", 0.0) < min_conf_sem - 0.05
+        )
+        if hard_fail:
+            return "ROJO"
+
+        strong_pass = (
+            row.get("signals", 0) >= min_signals_sem
+            and row.get("edge_proxy_mean", 0.0) >= min_edge_sem
+            and row.get("confidence_mean", 0.0) >= min_conf_sem
+        )
+        if strong_pass:
+            return "VERDE"
+        return "AMARILLO"
+
+    st.markdown("#### Curva acumulada de señales")
+    curve = filtered[["time_utc", "signal_cum"]].set_index("time_utc")
+    st.line_chart(curve)
+
+    st.markdown("#### Distribución de señales por hora")
+    by_hour = filtered.groupby("hour", as_index=True)["signal"].count().to_frame("signals")
+    st.bar_chart(by_hour)
+
+    st.markdown("#### Distribución BUY/SELL")
+    by_side = filtered.groupby("side_upper", as_index=True)["signal"].count().to_frame("count")
+    st.bar_chart(by_side)
+
+    if "event_name" in filtered.columns:
+        st.markdown("#### Top eventos por frecuencia")
+        top_events = (
+            filtered["event_name"].astype(str).value_counts().head(10).rename_axis("event_name").to_frame("count")
+        )
+        st.dataframe(top_events, use_container_width=True)
+
+    st.markdown("#### Últimas señales filtradas")
+    st.dataframe(filtered.tail(100), use_container_width=True)
+
+    st.markdown("#### Rendimiento proxy por moneda")
+    if "event_currency" in rec_df.columns:
+        by_currency = (
+            rec_df.groupby(rec_df["event_currency"].astype(str), as_index=True)
+            .agg(
+                signals=("signal", "count"),
+                confidence_mean=("confidence", "mean"),
+                edge_proxy_mean=("edge_proxy", "mean"),
+                net_bias=("signal", "sum"),
+            )
+            .sort_values(["edge_proxy_mean", "signals"], ascending=[False, False])
+        )
+        by_currency["semaforo"] = by_currency.apply(classify_row, axis=1)
+        st.bar_chart(by_currency[["signals", "edge_proxy_mean"]])
+        st.dataframe(by_currency.head(20), use_container_width=True)
+
+        st.markdown("##### Monedas recomendadas (VERDE)")
+        greens_currency = by_currency[by_currency["semaforo"] == "VERDE"].head(10)
+        if greens_currency.empty:
+            st.info("No hay monedas en VERDE con los umbrales actuales.")
+        else:
+            st.dataframe(greens_currency, use_container_width=True)
+            st.download_button(
+                "Exportar monedas VERDE (CSV)",
+                data=greens_currency.reset_index().to_csv(index=False),
+                file_name="recommended_currencies_green.csv",
+                mime="text/csv",
+                key=f"{widget_prefix}_export_green_currency",
+            )
+    else:
+        st.info("No hay columna event_currency para análisis por moneda.")
+
+    st.markdown("#### Rendimiento proxy por evento")
+    if "event_name" in rec_df.columns:
+        by_event = (
+            rec_df.groupby(rec_df["event_name"].astype(str), as_index=True)
+            .agg(
+                signals=("signal", "count"),
+                confidence_mean=("confidence", "mean"),
+                edge_proxy_mean=("edge_proxy", "mean"),
+                net_bias=("signal", "sum"),
+            )
+            .sort_values(["signals", "edge_proxy_mean"], ascending=[False, False])
+        )
+        by_event["semaforo"] = by_event.apply(classify_row, axis=1)
+        st.dataframe(by_event.head(25), use_container_width=True)
+
+        st.markdown("##### Eventos recomendados (VERDE)")
+        greens_event = by_event[by_event["semaforo"] == "VERDE"].head(15)
+        if greens_event.empty:
+            st.info("No hay eventos en VERDE con los umbrales actuales.")
+        else:
+            st.dataframe(greens_event, use_container_width=True)
+            st.download_button(
+                "Exportar eventos VERDE (CSV)",
+                data=greens_event.reset_index().to_csv(index=False),
+                file_name="recommended_events_green.csv",
+                mime="text/csv",
+                key=f"{widget_prefix}_export_green_events",
+            )
+
+        st.markdown("##### Top 5 eventos a operar")
+        score_df = by_event.copy()
+        score_df["signals_score"] = (score_df["signals"] / max(float(min_signals_sem), 1.0)).clip(upper=1.0)
+        score_df["operability_score"] = (
+            0.45 * score_df["edge_proxy_mean"]
+            + 0.35 * score_df["confidence_mean"]
+            + 0.20 * score_df["signals_score"]
+        )
+        score_df = score_df.sort_values(["semaforo", "operability_score", "signals"], ascending=[True, False, False])
+        top5 = score_df.head(5)
+        st.dataframe(top5[["semaforo", "signals", "confidence_mean", "edge_proxy_mean", "operability_score"]], use_container_width=True)
+        st.download_button(
+            "Exportar Top 5 eventos (CSV)",
+            data=top5.reset_index().to_csv(index=False),
+            file_name="top5_events_operability.csv",
+            mime="text/csv",
+            key=f"{widget_prefix}_export_top5_events",
+        )
+    else:
+        st.info("No hay columna event_name para análisis por evento.")
+
+
+def _get_mid_column(market: pd.DataFrame) -> pd.Series:
+    if {"bid", "ask"}.issubset(set(market.columns)):
+        return (pd.to_numeric(market["bid"], errors="coerce") + pd.to_numeric(market["ask"], errors="coerce")) / 2.0
+    if "close" in market.columns:
+        return pd.to_numeric(market["close"], errors="coerce")
+    return pd.Series(dtype=float)
+
+
+def enrich_trade_history_with_results(trades: pd.DataFrame, market_path: Path) -> pd.DataFrame:
+    if trades.empty:
+        return trades
+
+    out = trades.copy()
+    out["time_utc"] = pd.to_datetime(out.get("time_utc"), utc=True, errors="coerce")
+
+    event_col = "event_time_utc" if "event_time_utc" in out.columns else "time_utc"
+    out[event_col] = pd.to_datetime(out.get(event_col), utc=True, errors="coerce")
+
+    out["side_upper"] = out.get("side", "").astype(str).str.upper()
+    out["signal"] = out["side_upper"].map({"BUY": 1, "SELL": -1}).fillna(0).astype(int)
+    out["confidence"] = pd.to_numeric(out.get("confidence"), errors="coerce").fillna(0.0)
+
+    market = load_csv(market_path)
+    if market.empty or "time_utc" not in market.columns:
+        out["ret_post"] = np.nan
+        out["result_r"] = np.nan
+        out["result_label"] = "SIN_MARKET_DATA"
+        out["balance_r"] = np.nan
+        return out
+
+    market = market.copy()
+    market["time_utc"] = pd.to_datetime(market["time_utc"], utc=True, errors="coerce")
+    market = market.dropna(subset=["time_utc"]).sort_values("time_utc")
+    market["mid"] = _get_mid_column(market)
+    if {"bid", "ask"}.issubset(set(market.columns)):
+        market["bid"] = pd.to_numeric(market["bid"], errors="coerce")
+        market["ask"] = pd.to_numeric(market["ask"], errors="coerce")
+        market["spread_abs"] = market["ask"] - market["bid"]
+        market["spread_bps"] = np.where(
+            market["mid"] > 0,
+            (market["spread_abs"] / market["mid"]) * 10000.0,
+            np.nan,
+        )
+    else:
+        market["spread_bps"] = np.nan
+    market = market.dropna(subset=["mid"])
+
+    if market.empty:
+        out["ret_post"] = np.nan
+        out["result_r"] = np.nan
+        out["result_label"] = "SIN_MID_PRICE"
+        out["balance_r"] = np.nan
+        return out
+
+    market_idx = market.set_index("time_utc")
+    market_ts = market_idx["mid"]
+
+    ret_post = []
+    result_r = []
+    spread_bps_real = []
+    for _, row in out.iterrows():
+        event_time = row.get(event_col)
+        signal = int(row.get("signal", 0))
+
+        if pd.isna(event_time) or signal == 0:
+            ret_post.append(np.nan)
+            result_r.append(np.nan)
+            spread_bps_real.append(np.nan)
+            continue
+
+        t0 = event_time + pd.Timedelta(seconds=5)
+        t1 = event_time + pd.Timedelta(seconds=60)
+
+        try:
+            p0_idx = market_ts.index.get_indexer([t0], method="nearest")[0]
+            p1_idx = market_ts.index.get_indexer([t1], method="nearest")[0]
+            p0 = float(market_ts.iloc[p0_idx])
+            p1 = float(market_ts.iloc[p1_idx])
+            spread_entry_bps = pd.to_numeric(market_idx["spread_bps"].iloc[p0_idx], errors="coerce")
+            if p0 <= 0:
+                ret_post.append(np.nan)
+                result_r.append(np.nan)
+                spread_bps_real.append(np.nan)
+                continue
+            realized_ret = (p1 - p0) / p0
+            trade_ret = realized_ret * signal
+            ret_post.append(trade_ret)
+            result_r.append(1.0 if trade_ret > 0 else -1.0)
+            spread_bps_real.append(float(spread_entry_bps) if pd.notna(spread_entry_bps) else np.nan)
+        except Exception:
+            ret_post.append(np.nan)
+            result_r.append(np.nan)
+            spread_bps_real.append(np.nan)
+
+    out["ret_post"] = ret_post
+    out["result_r"] = result_r
+    out["spread_bps_real"] = spread_bps_real
+    out["result_label"] = np.where(
+        out["result_r"].isna(),
+        "SIN_RESULTADO",
+        np.where(out["result_r"] > 0, "WIN", "LOSS"),
+    )
+    out = out.sort_values("time_utc")
+    out["balance_r"] = out["result_r"].fillna(0.0).cumsum()
+
+    return out
+
+
+def render_trade_history_tab() -> None:
+    st.subheader("Histórico de operaciones")
+
+    paper_path = PROJECT_ROOT / "data/paper_trades.csv"
+    trades = load_csv(paper_path)
+    if trades.empty:
+        st.info(
+            "No hay histórico aún. El registro disponible en la UI se construye con data/paper_trades.csv "
+            "(pipeline de observabilidad)."
+        )
+        return
+
+    market_path = PROJECT_ROOT / settings.market_csv
+    enriched = enrich_trade_history_with_results(trades, market_path=market_path)
+
+    env_local = load_env()
+    risk_usd_default = parse_float(env_local.get("RISK_USD_PER_TRADE"), 25.0)
+    comm_usd_default = parse_float(env_local.get("COMMISSION_USD_PER_TRADE"), 0.0)
+    spread_bps_default = parse_float(env_local.get("SPREAD_BPS_PER_TRADE"), 0.0)
+    dynamic_spread_default = parse_bool(env_local.get("DYNAMIC_SPREAD_COST"), True)
+
+    risk_usd = st.number_input(
+        "Riesgo estimado por operación (USD)",
+        min_value=1.0,
+        max_value=100000.0,
+        value=float(risk_usd_default),
+        step=1.0,
+        key="history_risk_usd",
+        help="Convierte el balance en R a balance monetario estimado: USD = R * riesgo_por_operacion.",
+    )
+    comm_usd = st.number_input(
+        "Comisión estimada por operación (USD)",
+        min_value=0.0,
+        max_value=10000.0,
+        value=float(comm_usd_default),
+        step=0.1,
+        key="history_comm_usd",
+        help="Costo fijo por operación (ida y vuelta).",
+    )
+    spread_bps = st.number_input(
+        "Spread/costo variable (bps por operación)",
+        min_value=0.0,
+        max_value=500.0,
+        value=float(spread_bps_default),
+        step=0.1,
+        key="history_spread_bps",
+        help="Costo variable sobre riesgo: costo_spread = riesgo * (bps / 10000).",
+    )
+    use_dynamic_spread = st.toggle(
+        "Usar spread real por operación (si hay bid/ask)",
+        value=bool(dynamic_spread_default),
+        key="history_dynamic_spread",
+        help="Si está activo, usa spread real en bps al momento de entrada. Si falta, usa el bps fijo.",
+    )
+
+    st.caption(f"Archivo de operaciones: {paper_path}")
+    st.caption(f"Archivo de mercado para resultados: {market_path}")
+
+    if "time_utc" in enriched.columns:
+        enriched["time_utc"] = pd.to_datetime(enriched["time_utc"], utc=True, errors="coerce")
+        min_date = enriched["time_utc"].dt.date.min()
+        max_date = enriched["time_utc"].dt.date.max()
+        if pd.notna(min_date) and pd.notna(max_date):
+            date_range = st.date_input(
+                "Rango de fechas",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+                key="history_date_range",
+            )
+            if isinstance(date_range, tuple) and len(date_range) == 2:
+                start_date, end_date = date_range
+                enriched = enriched[
+                    (enriched["time_utc"].dt.date >= start_date)
+                    & (enriched["time_utc"].dt.date <= end_date)
+                ]
+
+    if enriched.empty:
+        st.info("No hay operaciones en el rango seleccionado.")
+        return
+
+    valid = enriched.dropna(subset=["result_r"])
+    total_ops = int(len(enriched))
+    ops_with_result = int(len(valid))
+    wins = int((valid["result_r"] > 0).sum()) if not valid.empty else 0
+    losses = int((valid["result_r"] < 0).sum()) if not valid.empty else 0
+    hit_rate = float(wins / ops_with_result) if ops_with_result > 0 else 0.0
+    balance_r = float(valid["result_r"].sum()) if ops_with_result > 0 else 0.0
+    avg_r = float(valid["result_r"].mean()) if ops_with_result > 0 else 0.0
+    balance_usd = balance_r * float(risk_usd)
+    avg_usd = avg_r * float(risk_usd)
+
+    enriched["result_usd"] = enriched["result_r"] * float(risk_usd)
+    enriched["balance_usd"] = enriched["balance_r"] * float(risk_usd)
+
+    spread_cost_usd_per_trade = float(risk_usd) * (float(spread_bps) / 10000.0)
+    dynamic_spread_cost = float(risk_usd) * (pd.to_numeric(enriched.get("spread_bps_real"), errors="coerce") / 10000.0)
+    dynamic_available = dynamic_spread_cost.notna()
+    effective_spread_cost = np.where(
+        use_dynamic_spread,
+        np.where(dynamic_available, dynamic_spread_cost, spread_cost_usd_per_trade),
+        spread_cost_usd_per_trade,
+    )
+    enriched["spread_cost_usd"] = np.where(enriched["result_r"].isna(), 0.0, effective_spread_cost)
+    enriched["cost_usd"] = np.where(
+        enriched["result_r"].isna(),
+        0.0,
+        float(comm_usd) + enriched["spread_cost_usd"],
+    )
+    enriched["result_usd_net"] = np.where(
+        enriched["result_r"].isna(),
+        np.nan,
+        enriched["result_usd"] - enriched["cost_usd"],
+    )
+    enriched["balance_usd_net"] = enriched["result_usd_net"].fillna(0.0).cumsum()
+
+    total_cost_usd = float(enriched["cost_usd"].sum())
+    balance_usd_net = float(enriched["result_usd_net"].dropna().sum()) if ops_with_result > 0 else 0.0
+    avg_usd_net = float(enriched["result_usd_net"].dropna().mean()) if ops_with_result > 0 else 0.0
+    dynamic_coverage = float(dynamic_available.mean()) if len(dynamic_available) > 0 else 0.0
+
+    k1, k2, k3, k4, k5, k6, k7, k8 = st.columns(8)
+    k1.metric("Operaciones", total_ops)
+    k2.metric("Con resultado", ops_with_result)
+    k3.metric("Wins", wins)
+    k4.metric("Losses", losses)
+    k5.metric("Hit Rate", f"{hit_rate:.1%}")
+    k6.metric("Balance general (R)", f"{balance_r:+.2f}")
+    k7.metric("Balance general (USD)", f"${balance_usd:+,.2f}")
+    k8.metric("Balance neto (USD)", f"${balance_usd_net:+,.2f}")
+    st.caption(
+        f"Promedio por operación: {avg_r:+.3f} R | bruto ${avg_usd:+,.2f} | neto ${avg_usd_net:+,.2f}"
+    )
+    st.caption(
+        f"Costos aplicados: comisión ${float(comm_usd):,.2f} + spread base {float(spread_bps):.2f} bps "
+        f"(=${spread_cost_usd_per_trade:,.2f}) por operación. Total costos: ${total_cost_usd:,.2f}"
+    )
+    if use_dynamic_spread:
+        st.caption(f"Spread dinámico activo. Cobertura con bid/ask real: {dynamic_coverage:.1%} de operaciones.")
+
+    st.markdown("#### Curva de balance acumulado")
+    if "time_utc" in enriched.columns:
+        curve = enriched[["time_utc", "balance_r"]].dropna(subset=["time_utc"]).set_index("time_utc")
+        if not curve.empty:
+            st.line_chart(curve)
+        else:
+            st.info("No hay timestamps válidos para graficar balance.")
+
+    st.markdown("#### Curva de balance acumulado (USD estimado)")
+    if "time_utc" in enriched.columns:
+        curve_usd = enriched[["time_utc", "balance_usd"]].dropna(subset=["time_utc"]).set_index("time_utc")
+        if not curve_usd.empty:
+            st.line_chart(curve_usd)
+        else:
+            st.info("No hay timestamps válidos para graficar balance USD.")
+
+    st.markdown("#### Curva de balance acumulado neto (USD)")
+    if "time_utc" in enriched.columns:
+        curve_usd_net = enriched[["time_utc", "balance_usd_net"]].dropna(subset=["time_utc"]).set_index("time_utc")
+        if not curve_usd_net.empty:
+            st.line_chart(curve_usd_net)
+        else:
+            st.info("No hay timestamps válidos para graficar balance USD neto.")
+
+    st.markdown("#### Resumen por side")
+    if "side_upper" in enriched.columns:
+        side_summary = (
+            enriched.groupby("side_upper", as_index=False)
+            .agg(
+                operaciones=("side_upper", "count"),
+                wins=("result_label", lambda s: int((s == "WIN").sum())),
+                losses=("result_label", lambda s: int((s == "LOSS").sum())),
+                balance_r=("result_r", "sum"),
+                balance_usd=("result_usd", "sum"),
+                balance_usd_net=("result_usd_net", "sum"),
+            )
+        )
+        side_summary["hit_rate"] = np.where(
+            side_summary["operaciones"] > 0,
+            side_summary["wins"] / side_summary["operaciones"],
+            0.0,
+        )
+        st.dataframe(side_summary, use_container_width=True)
+
+    st.markdown("#### Detalle de operaciones")
+    cols_preferred = [
+        "time_utc",
+        "event_time_utc",
+        "event_id",
+        "event_name",
+        "event_currency",
+        "symbol",
+        "side",
+        "confidence",
+        "proba_buy",
+        "ret_post",
+        "result_label",
+        "result_r",
+        "result_usd",
+        "spread_bps_real",
+        "spread_cost_usd",
+        "cost_usd",
+        "result_usd_net",
+        "balance_r",
+        "balance_usd",
+        "balance_usd_net",
+        "mode",
+    ]
+    cols_present = [c for c in cols_preferred if c in enriched.columns]
+    history_view = enriched[cols_present].copy()
+    st.dataframe(history_view.sort_values("time_utc", ascending=False).head(500), use_container_width=True)
+
+    st.download_button(
+        "Exportar histórico enriquecido (CSV)",
+        data=history_view.to_csv(index=False),
+        file_name="trade_history_enriched.csv",
+        mime="text/csv",
+        key="history_export_csv",
+    )
+
+
+def main() -> None:
+    st.set_page_config(page_title="Economic AE Control Center", layout="wide")
+
+    st.title("Economic AE Control Center")
+    st.caption("Panel orientado a operación real: configuración LIVE, monitoreo, entrenamiento y validación")
+
+    env_vals = load_env()
+    sem_min_signals = parse_int(env_vals.get("SEM_MIN_SIGNALS"), 8)
+    sem_min_edge = parse_float(env_vals.get("SEM_MIN_EDGE"), 0.58)
+    sem_min_conf = parse_float(env_vals.get("SEM_MIN_CONF"), 0.60)
+    utc_offset_hours = parse_float(env_vals.get("UTC_OFFSET_HOURS"), -5.0)
+    ny_latam_preset_default = parse_bool(env_vals.get("NY_LATAM_PRESET_DEFAULT"), False)
+    paper_mode = parse_bool(env_vals.get("PAPER_TRADING"), settings.paper_trading)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Modo de ejecución", "PAPER" if paper_mode else "LIVE")
+    m2.metric("Símbolo", env_vals.get("SYMBOL", settings.symbol))
+    m3.metric("Offset horario", f"UTC{utc_offset_hours:+g}")
+    if paper_mode:
+        st.warning("Actualmente estás en PAPER mode. Cambia a LIVE en Configuración para operar real.")
+    else:
+        st.success("Actualmente estás en LIVE mode (producción real).")
+
+    tab_overview, tab_config, tab_data, tab_train, tab_backtest, tab_live, tab_history = st.tabs(
+        ["Resumen", "Configuración", "Datos", "Entrenamiento", "Backtest", "Operación Real", "Histórico Operaciones"]
+    )
+
+    with tab_overview:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Events CSV", "OK" if (PROJECT_ROOT / "data/events.csv").exists() else "Missing")
+        c2.metric("Market CSV", "OK" if (PROJECT_ROOT / "data/market_ticks.csv").exists() else "Missing")
+        c3.metric("Models", "OK" if (PROJECT_ROOT / "models/metadata.json").exists() else "Missing")
+
+        st.subheader("Último summary de walk-forward")
+        summary = read_if_exists(PROJECT_ROOT / "models/walkforward_summary.json")
+        st.code(summary or "No disponible")
+
+        render_walkforward_charts(PROJECT_ROOT / "models/walkforward_monthly_report.csv")
+
+        st.subheader("Monitoreo de ejecución")
+        st.caption("Vista analítica sobre los registros disponibles en data/paper_trades.csv")
+        render_paper_trade_charts(
+            PROJECT_ROOT / "data/paper_trades.csv",
+            widget_prefix="overview",
+            min_signals_sem=sem_min_signals,
+            min_edge_sem=sem_min_edge,
+            min_conf_sem=sem_min_conf,
+            utc_offset_hours=utc_offset_hours,
+            ny_latam_preset_default=ny_latam_preset_default,
+        )
+
+    with tab_config:
+        st.subheader("Parámetros de trading y filtros")
+
+        symbol = st.text_input("Par de divisas", value=env_vals.get("SYMBOL", "EURUSD"))
+        min_imp = st.number_input("Importancia mínima de evento", min_value=1, max_value=3, value=int(env_vals.get("EVENT_MIN_IMPORTANCE", "2")))
+        include_kw = st.text_input("Incluir eventos por keywords (coma)", value=env_vals.get("EVENT_INCLUDE_KEYWORDS", ""))
+        exclude_kw = st.text_input("Excluir eventos por keywords (coma)", value=env_vals.get("EVENT_EXCLUDE_KEYWORDS", ""))
+        threshold = st.text_input("Decision threshold", value=env_vals.get("DECISION_THRESHOLD", "0.60"))
+        no_trade = st.text_input("No trade band", value=env_vals.get("NO_TRADE_BAND", "0.05"))
+        paper = st.selectbox(
+            "Modo de ejecución",
+            options=["false", "true"],
+            index=0 if env_vals.get("PAPER_TRADING", "true").lower() == "false" else 1,
+            help="false = LIVE real, true = PAPER pruebas.",
+        )
+        label_mode = st.selectbox(
+            "Modo de etiquetado",
+            options=["sign", "quantile", "quantile_monthly"],
+            index=["sign", "quantile", "quantile_monthly"].index(env_vals.get("DIRECTION_LABEL_MODE", "quantile_monthly")) if env_vals.get("DIRECTION_LABEL_MODE", "quantile_monthly") in ["sign", "quantile", "quantile_monthly"] else 2,
+        )
+        st.markdown("### Preset semáforo")
+        sem_min_signals_in = st.number_input("SEM_MIN_SIGNALS", min_value=1, max_value=1000, value=sem_min_signals, step=1)
+        sem_min_edge_in = st.number_input("SEM_MIN_EDGE", min_value=0.0, max_value=1.0, value=float(sem_min_edge), step=0.01)
+        sem_min_conf_in = st.number_input("SEM_MIN_CONF", min_value=0.0, max_value=1.0, value=float(sem_min_conf), step=0.01)
+        st.markdown("### Preset operativo")
+        ny_latam_default_in = st.selectbox(
+            "NY_LATAM_PRESET_DEFAULT",
+            options=["false", "true"],
+            index=1 if ny_latam_preset_default else 0,
+            help="Define si el toggle NY/LATAM inicia activo al abrir la UI.",
+        )
+        risk_usd_in = st.number_input(
+            "RISK_USD_PER_TRADE",
+            min_value=1.0,
+            max_value=100000.0,
+            value=parse_float(env_vals.get("RISK_USD_PER_TRADE"), 25.0),
+            step=1.0,
+            help="Valor usado en la pestaña Histórico Operaciones para estimar balance monetario.",
+        )
+        comm_usd_in = st.number_input(
+            "COMMISSION_USD_PER_TRADE",
+            min_value=0.0,
+            max_value=10000.0,
+            value=parse_float(env_vals.get("COMMISSION_USD_PER_TRADE"), 0.0),
+            step=0.1,
+            help="Costo fijo por operación para balance neto en la pestaña Histórico Operaciones.",
+        )
+        spread_bps_in = st.number_input(
+            "SPREAD_BPS_PER_TRADE",
+            min_value=0.0,
+            max_value=500.0,
+            value=parse_float(env_vals.get("SPREAD_BPS_PER_TRADE"), 0.0),
+            step=0.1,
+            help="Costo variable por operación en bps sobre el riesgo por trade.",
+        )
+        dynamic_spread_in = st.selectbox(
+            "DYNAMIC_SPREAD_COST",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("DYNAMIC_SPREAD_COST"), True) else 1,
+            help="Si true, usa spread real bid/ask cuando esté disponible en el histórico.",
+        )
+
+        if st.button("Guardar configuración"):
+            env_vals["SYMBOL"] = symbol
+            env_vals["EVENT_MIN_IMPORTANCE"] = str(min_imp)
+            env_vals["EVENT_INCLUDE_KEYWORDS"] = include_kw
+            env_vals["EVENT_EXCLUDE_KEYWORDS"] = exclude_kw
+            env_vals["DECISION_THRESHOLD"] = threshold
+            env_vals["NO_TRADE_BAND"] = no_trade
+            env_vals["PAPER_TRADING"] = paper
+            env_vals["DIRECTION_LABEL_MODE"] = label_mode
+            env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
+            env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"
+            env_vals["SEM_MIN_CONF"] = f"{float(sem_min_conf_in):.4f}"
+            env_vals["NY_LATAM_PRESET_DEFAULT"] = ny_latam_default_in
+            env_vals["RISK_USD_PER_TRADE"] = f"{float(risk_usd_in):.2f}"
+            env_vals["COMMISSION_USD_PER_TRADE"] = f"{float(comm_usd_in):.2f}"
+            env_vals["SPREAD_BPS_PER_TRADE"] = f"{float(spread_bps_in):.2f}"
+            env_vals["DYNAMIC_SPREAD_COST"] = dynamic_spread_in
+            save_env(env_vals)
+            st.success("Configuración guardada en .env")
+
+    with tab_data:
+        st.subheader("Recolección y diagnóstico de datos")
+
+        if st.button("Ejecutar bootstrap"):
+            code, out = run_module("src.bootstrap")
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+        col_a, col_b = st.columns(2)
+        if col_a.button("Recolectar data entrenamiento"):
+            code, out = run_module("src.data_collection")
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+        if col_b.button("Preparar dataset mensual largo"):
+            code, out = run_module("src.prepare_monthly_dataset")
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+        if st.button("Diagnóstico por mes"):
+            code, out = run_module("src.dataset_diagnostics")
+            st.code(out)
+            st.info(f"Exit code: {code}")
+            diag_path = PROJECT_ROOT / "models/dataset_monthly_diagnostics.csv"
+            if diag_path.exists():
+                st.dataframe(pd.read_csv(diag_path).head(100), use_container_width=True)
+
+    with tab_train:
+        st.subheader("Entrenar, evaluar y gestionar históricos de modelos")
+
+        c1, c2 = st.columns(2)
+        if c1.button("Entrenar modelos"):
+            code, out = run_module("src.train")
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+        if c2.button("Evaluar modelos"):
+            code, out = run_module("src.evaluate")
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+        st.markdown("### Snapshots de modelos")
+        snap_name = st.text_input("Nombre snapshot (opcional)", value="")
+        if st.button("Guardar snapshot actual"):
+            try:
+                name = snapshot_current_models(name=snap_name if snap_name.strip() else None)
+                st.success(f"Snapshot guardado: {name}")
+            except Exception as ex:
+                st.error(str(ex))
+
+        snaps = list_snapshots()
+        selected = st.selectbox("Restaurar snapshot", options=[""] + snaps)
+        if st.button("Restaurar snapshot seleccionado"):
+            if not selected:
+                st.warning("Selecciona un snapshot")
+            else:
+                try:
+                    restore_snapshot(selected)
+                    st.success(f"Snapshot restaurado: {selected}")
+                except Exception as ex:
+                    st.error(str(ex))
+
+    with tab_backtest:
+        st.subheader("Backtesting")
+
+        strict = st.selectbox("Validación mensual estricta", options=["true", "false"], index=0)
+        events_csv = st.text_input("EVENTS_CSV para backtest", value=env_vals.get("EVENTS_CSV", "data/events.csv"))
+        market_csv = st.text_input("MARKET_CSV para backtest", value=env_vals.get("MARKET_CSV", "data/market_ticks.csv"))
+
+        if st.button("Ejecutar walk-forward backtest"):
+            code, out = run_module(
+                "src.walkforward_backtest",
+                extra_env={
+                    "STRICT_MONTHLY_VALIDATION": strict,
+                    "EVENTS_CSV": events_csv,
+                    "MARKET_CSV": market_csv,
+                },
+            )
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+            summary_path = PROJECT_ROOT / "models/walkforward_summary.json"
+            report_path = PROJECT_ROOT / "models/walkforward_monthly_report.csv"
+            if summary_path.exists():
+                st.code(summary_path.read_text(encoding="utf-8", errors="ignore"))
+            if report_path.exists():
+                st.dataframe(pd.read_csv(report_path), use_container_width=True)
+
+        st.markdown("### Visuales de backtest")
+        render_walkforward_charts(PROJECT_ROOT / "models/walkforward_monthly_report.csv")
+
+    with tab_live:
+        st.subheader("Operación real")
+        st.write("Esta sección está orientada a producción. Verifica Modo de ejecución=LIVE antes de arrancar.")
+
+        st.caption(f"Modo actual detectado en configuración: {'PAPER' if paper_mode else 'LIVE'}")
+        if paper_mode:
+            st.warning("La configuración actual está en PAPER. Para habilitar LIVE debes cambiar PAPER_TRADING=false.")
+            if st.button("Cambiar a LIVE ahora (guardar en .env)"):
+                env_vals["PAPER_TRADING"] = "false"
+                save_env(env_vals)
+                st.success("Modo cambiado a LIVE en .env. Recargando panel...")
+                st.rerun()
+
+        if "live_mt5_last_ok" not in st.session_state:
+            st.session_state["live_mt5_last_ok"] = False
+        if "live_mt5_last_msg" not in st.session_state:
+            st.session_state["live_mt5_last_msg"] = "Sin verificación en esta sesión."
+
+        st.markdown("### Checklist pre-LIVE")
+        critical_checks = [
+            ("Modo de ejecución LIVE", not paper_mode),
+            ("Modelos entrenados", (PROJECT_ROOT / "models/metadata.json").exists()),
+        ]
+        advisory_checks = [
+            ("Calendario de eventos disponible", (PROJECT_ROOT / "data/events.csv").exists()),
+            ("Datos de mercado disponibles (analítica UI)", (PROJECT_ROOT / settings.market_csv).exists()),
+            ("Credenciales MT5 configuradas en .env", settings.mt5_login > 0 and bool(settings.mt5_server)),
+            ("MT5 verificado en esta sesión", bool(st.session_state.get("live_mt5_last_ok", False))),
+        ]
+
+        st.markdown("#### Requisitos críticos (bloquean LIVE)")
+        for label, ok in critical_checks:
+            st.write(f"{'OK' if ok else 'PENDIENTE'} - {label}")
+
+        st.markdown("#### Requisitos recomendados (no bloquean LIVE)")
+        for label, ok in advisory_checks:
+            st.write(f"{'OK' if ok else 'PENDIENTE'} - {label}")
+
+        if st.button("Probar conexión MT5 ahora"):
+            ok_mt5, msg_mt5 = verify_mt5_connection()
+            st.session_state["live_mt5_last_ok"] = ok_mt5
+            st.session_state["live_mt5_last_msg"] = msg_mt5
+            (st.success if ok_mt5 else st.warning)(msg_mt5)
+
+        st.caption(f"Última verificación MT5: {st.session_state.get('live_mt5_last_msg', 'Sin verificación')}")
+
+        all_ready = all(flag for _, flag in critical_checks)
+        if all_ready:
+            st.success("Requisitos críticos completos. Listo para operación LIVE.")
+        else:
+            st.warning("Checklist crítico incompleto. Corrige los ítems PENDIENTE para habilitar LIVE.")
+
+        st.markdown("### Armado de seguridad LIVE")
+        arm_live = st.checkbox(
+            "He verificado el checklist y autorizo operación LIVE",
+            value=False,
+            key="live_arm_checkbox",
+        )
+        arm_code = st.text_input(
+            "Confirmación manual",
+            value="",
+            key="live_arm_code",
+            placeholder="Escribe ARMAR LIVE para confirmar",
+        )
+        live_armed = (not paper_mode) and all_ready and arm_live and arm_code.strip().upper() == "ARMAR LIVE"
+        st.info("Estado armado: ACTIVO" if live_armed else "Estado armado: INACTIVO")
+
+        st.markdown("### Control del bot LIVE")
+        live_pid = get_live_bot_pid()
+        st.write(f"Estado del proceso: {'EJECUTANDO' if live_pid else 'DETENIDO'}")
+        if live_pid:
+            st.caption(f"PID activo: {live_pid}")
+
+        c_start, c_stop = st.columns(2)
+        if c_start.button("Iniciar bot LIVE", disabled=not live_armed or bool(live_pid)):
+            ok, msg = start_live_bot_process()
+            (st.success if ok else st.error)(msg)
+            st.rerun()
+        if c_stop.button("Detener bot LIVE", disabled=not bool(live_pid)):
+            ok, msg = stop_live_bot_process()
+            (st.success if ok else st.warning)(msg)
+            st.rerun()
+
+        st.markdown("### Comando de arranque LIVE")
+        st.code("$env:PAPER_TRADING='false'; .\\.venv311\\Scripts\\python.exe -m src.main")
+        if not live_armed:
+            st.caption("El comando se muestra, pero la ejecución LIVE requiere armado activo y checklist completo.")
+        else:
+            st.caption("Armado LIVE activo. Puedes ejecutar el comando con seguridad operativa reforzada.")
+
+        if st.button("Ver últimos registros de ejecución"):
+            p = PROJECT_ROOT / "data/paper_trades.csv"
+            if p.exists():
+                st.dataframe(pd.read_csv(p).tail(100), use_container_width=True)
+            else:
+                st.info("Aún no existe data/paper_trades.csv")
+
+        st.markdown("### Gráficos de operación")
+        st.caption("Fuente actual del dashboard: data/paper_trades.csv")
+        render_paper_trade_charts(
+            PROJECT_ROOT / "data/paper_trades.csv",
+            widget_prefix="live",
+            min_signals_sem=sem_min_signals,
+            min_edge_sem=sem_min_edge,
+            min_conf_sem=sem_min_conf,
+            utc_offset_hours=utc_offset_hours,
+            ny_latam_preset_default=ny_latam_preset_default,
+        )
+
+        with st.expander("Herramientas de prueba (paper)", expanded=False):
+            st.write("Utilidades de prueba para validar pipeline sin enviar órdenes reales.")
+            if not paper_mode:
+                st.warning("Herramientas de prueba bloqueadas porque el sistema está configurado en LIVE.")
+            if st.button("Ejecutar smoke test de pipeline", disabled=not paper_mode):
+                code, out = run_module("src.bootstrap")
+                st.code(out)
+                st.info(f"Exit code: {code}")
+
+    with tab_history:
+        render_trade_history_tab()
+
+
+if __name__ == "__main__":
+    main()

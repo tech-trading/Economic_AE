@@ -1,0 +1,12 @@
+{
+  "feature_columns": [
+    "event_importance",
+    "pre_ret_mean",
+    "pre_ret_std",
+    "pre_ret_abs_sum",
+    "pre_spread_mean",
+    "pre_spread_std",
+    "pre_price_slope",
+    "lookback_seconds"
+  ]
+}

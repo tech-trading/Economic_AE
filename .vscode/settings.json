@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "C:\\Users\\cesar\\OneDrive\\Documentos\\Proyectos\\Economic_AE\\.venv\\Scripts\\python.exe",
+  "python.venvPath": "C:\\Users\\cesar\\OneDrive\\Documentos\\Proyectos\\Economic_AE",
+  "python.analysis.extraPaths": [
+    "C:\\Users\\cesar\\OneDrive\\Documentos\\Proyectos\\Economic_AE\\.venv\\Lib\\site-packages"
+  ]
+}

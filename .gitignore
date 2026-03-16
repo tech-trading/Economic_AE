@@ -1,0 +1,33 @@
+# Ignore common Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+.venv-*/
+.venv*
+venv*/
+/.venv311/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Runtime/log artifacts
+logs/*.pid
+
+# Generated analysis/training artifacts
+data/comparison/
+data/event_windows/
+data/event_windows_summary.csv
+models/event_dataset*.npz
+models/event_lstm.h5
+
+# Local environment secrets
+.env

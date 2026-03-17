@@ -601,6 +601,86 @@ def enrich_trade_history_with_results(trades: pd.DataFrame, market_path: Path) -
 
     return out
 
+def render_live_status_panel(live_activity_path: Path, daily_report_path: Path) -> None:
+    st.markdown("### Estado LIVE en tiempo real")
+
+    report_obj: dict[str, object] = {}
+    if daily_report_path.exists():
+        try:
+            report_obj = json.loads(daily_report_path.read_text(encoding="utf-8"))
+        except Exception:
+            report_obj = {}
+
+    activity = load_csv(live_activity_path)
+    if not activity.empty and "time_utc" in activity.columns:
+        activity["time_utc"] = pd.to_datetime(activity["time_utc"], utc=True, errors="coerce")
+        activity = activity.dropna(subset=["time_utc"]).sort_values("time_utc")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Archivo actividad", "OK" if live_activity_path.exists() else "Missing")
+    c2.metric("Reporte diario", "OK" if daily_report_path.exists() else "Missing")
+
+    if not activity.empty:
+        last_row = activity.iloc[-1]
+        c3.metric("Última acción", str(last_row.get("action", "N/A")))
+        c4.metric("Último evento UTC", str(last_row.get("time_utc", "N/A")))
+    else:
+        c3.metric("Última acción", "N/A")
+        c4.metric("Último evento UTC", "N/A")
+
+    if report_obj:
+        st.caption(
+            f"Reporte 24h: generado {report_obj.get('generated_at_utc', 'N/A')} | "
+            f"actividad={report_obj.get('activity', {}).get('rows', 0)}"
+        )
+
+    if activity.empty:
+        st.info("No hay actividad LIVE registrada todavía.")
+        return
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    recent = activity[activity["time_utc"] >= (now_utc - pd.Timedelta(hours=24))].copy()
+
+    # Semáforo operativo basado en señal de vida reciente y errores de calendario.
+    last_ts = activity["time_utc"].iloc[-1]
+    mins_since_last = float((now_utc - last_ts).total_seconds() / 60.0)
+    has_recent_heartbeat = mins_since_last <= 5.0
+    has_calendar_error = bool(recent["action"].astype(str).eq("calendar_refresh_error").any()) if not recent.empty else False
+    has_recent_refresh = bool(recent["action"].astype(str).eq("calendar_refresh").any()) if not recent.empty else False
+    only_no_events = bool(
+        (not recent.empty)
+        and recent["action"].astype(str).isin(["calendar_refresh", "no_upcoming_events"]).all()
+    )
+
+    if has_recent_heartbeat and has_recent_refresh and (not has_calendar_error):
+        health_state = "VERDE"
+        health_msg = "Bot activo y refrescando calendario con normalidad."
+        st.success(f"Semáforo LIVE: {health_state} | {health_msg}")
+    elif has_recent_heartbeat and (only_no_events or not has_recent_refresh):
+        health_state = "AMARILLO"
+        health_msg = "Bot activo, pero sin eventos operables recientes."
+        st.warning(f"Semáforo LIVE: {health_state} | {health_msg}")
+    else:
+        health_state = "ROJO"
+        health_msg = "Actividad estancada o error de calendario. Revisar conectividad/fuente de eventos."
+        st.error(f"Semáforo LIVE: {health_state} | {health_msg}")
+
+    s1, s2, s3 = st.columns(3)
+    s1.metric("Estado", health_state)
+    s2.metric("Min desde última actividad", f"{mins_since_last:.1f}")
+    s3.metric("Errores calendar 24h", int(recent["action"].astype(str).eq("calendar_refresh_error").sum()) if not recent.empty else 0)
+
+    st.markdown("#### Acciones últimas 24h")
+    if recent.empty:
+        st.info("Sin acciones en las últimas 24h.")
+    else:
+        counts = recent["action"].astype(str).value_counts().rename_axis("action").to_frame("count")
+        st.bar_chart(counts)
+
+    st.markdown("#### Últimos eventos LIVE")
+    cols = [c for c in ["time_utc", "mode", "strategy", "action", "event_id", "detail"] if c in activity.columns]
+    st.dataframe(activity[cols].tail(120).sort_values("time_utc", ascending=False), use_container_width=True)
+
 
 def render_trade_history_tab() -> None:
     st.subheader("Histórico de operaciones")
@@ -1294,6 +1374,13 @@ def main() -> None:
     with tab_live:
         st.subheader("Operación real")
         st.write("Esta sección está orientada a producción. Verifica Modo de ejecución=LIVE antes de arrancar.")
+
+        if st.button("Actualizar estado LIVE"):
+            st.rerun()
+        render_live_status_panel(
+            PROJECT_ROOT / settings.live_activity_csv,
+            PROJECT_ROOT / settings.model_dir / "daily_live_report.json",
+        )
 
         st.caption(f"Modo actual detectado en configuración: {'PAPER' if paper_mode else 'LIVE'}")
         if paper_mode:

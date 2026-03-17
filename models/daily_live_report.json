@@ -1,0 +1,18 @@
+{
+  "generated_at_utc": "2026-03-17T01:38:57.351809+00:00",
+  "window_hours": 24,
+  "since_utc": "2026-03-16T01:38:57.351809+00:00",
+  "activity": {
+    "rows": 12,
+    "actions": {
+      "calendar_refresh": 6,
+      "no_upcoming_events": 6
+    }
+  },
+  "paper": {
+    "signals": 0,
+    "buy_signals": 0,
+    "sell_signals": 0,
+    "avg_confidence": 0.0
+  }
+}

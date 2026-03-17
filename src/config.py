@@ -70,6 +70,10 @@ class Settings:
     mt5_password: str = os.getenv("MT5_PASSWORD", "")
     mt5_server: str = os.getenv("MT5_SERVER", "")
 
+    live_calendar_refresh_seconds: int = int(os.getenv("LIVE_CALENDAR_REFRESH_SECONDS", "120"))
+    live_loop_sleep_seconds: int = int(os.getenv("LIVE_LOOP_SLEEP_SECONDS", "1"))
+    live_activity_csv: str = os.getenv("LIVE_ACTIVITY_CSV", "data/live_activity.csv")
+
     @property
     def local_tz(self) -> timezone:
         return timezone(timedelta(hours=self.utc_offset_hours))

@@ -51,6 +51,8 @@ class Settings:
     donchian_min_channel_pips: float = float(os.getenv("DONCHIAN_MIN_CHANNEL_PIPS", "1.0"))
     donchian_confirm_ticks: int = int(os.getenv("DONCHIAN_CONFIRM_TICKS", "1"))
     donchian_trigger_quantile: float = float(os.getenv("DONCHIAN_TRIGGER_QUANTILE", "0.80"))
+    donchian_session_filter: bool = os.getenv("DONCHIAN_SESSION_FILTER", "false").strip().lower() in {"1", "true", "yes", "y"}
+    donchian_sessions: str = os.getenv("DONCHIAN_SESSIONS", "london,ny")
 
     data_dir: str = os.getenv("DATA_DIR", "data")
     model_dir: str = os.getenv("MODEL_DIR", "models")

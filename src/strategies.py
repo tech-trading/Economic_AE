@@ -183,12 +183,32 @@ class DonchianBreakoutStrategy(Strategy):
         min_channel_pips: float = 1.0,
         confirm_ticks: int = 1,
         trigger_quantile: float = 0.80,
+        session_filter: bool = False,
+        sessions: str = "london,ny",
     ):
         self.lookback_seconds = lookback_seconds
         self.breakout_buffer_pips = breakout_buffer_pips
         self.min_channel_pips = min_channel_pips
         self.confirm_ticks = max(1, int(confirm_ticks))
         self.trigger_quantile = float(np.clip(trigger_quantile, 0.55, 0.95))
+        self.session_filter = bool(session_filter)
+        self.sessions = {s.strip().lower() for s in str(sessions).split(",") if s.strip()}
+
+    @staticmethod
+    def _is_in_ny_london_window(ts: pd.Timestamp, sessions: set[str]) -> bool:
+        h = int(ts.hour)
+        windows = {
+            "london": (6, 11),
+            "ny": (12, 17),
+            "newyork": (12, 17),
+        }
+        for s in sessions:
+            if s not in windows:
+                continue
+            h0, h1 = windows[s]
+            if h0 <= h <= h1:
+                return True
+        return False
 
     @staticmethod
     def _pip_size(symbol: str) -> float:
@@ -220,6 +240,15 @@ class DonchianBreakoutStrategy(Strategy):
         window = self._window(ticks)
         if window.empty or len(window) < max(6, self.confirm_ticks + 3):
             return None
+
+        if self.session_filter:
+            evt_ts = pd.NaT
+            if isinstance(event_row, pd.Series) and "date_utc" in event_row.index:
+                evt_ts = pd.to_datetime(event_row.get("date_utc"), utc=True, errors="coerce")
+            if pd.isna(evt_ts):
+                evt_ts = pd.to_datetime(window["time_utc"].iat[-1], utc=True, errors="coerce")
+            if pd.notna(evt_ts) and not self._is_in_ny_london_window(evt_ts, self.sessions or {"london", "ny"}):
+                return None
 
         mid = ((window["bid"].astype(float) + window["ask"].astype(float)) / 2.0).dropna()
         if len(mid) < max(6, self.confirm_ticks + 3):
@@ -294,6 +323,18 @@ def get_strategy(name: str, settings, policy: dict) -> Strategy:
             min_channel_pips=float(settings.donchian_min_channel_pips),
             confirm_ticks=int(settings.donchian_confirm_ticks),
             trigger_quantile=float(settings.donchian_trigger_quantile),
+            session_filter=bool(settings.donchian_session_filter),
+            sessions=str(settings.donchian_sessions),
+        )
+    if name in {"donchian_nylondon", "donchian_session", "donchian_ny_london"}:
+        return DonchianBreakoutStrategy(
+            lookback_seconds=int(settings.donchian_lookback_seconds),
+            breakout_buffer_pips=float(settings.donchian_breakout_buffer_pips),
+            min_channel_pips=float(settings.donchian_min_channel_pips),
+            confirm_ticks=int(settings.donchian_confirm_ticks),
+            trigger_quantile=float(settings.donchian_trigger_quantile),
+            session_filter=True,
+            sessions="london,ny",
         )
     # default fallback
     return DefaultStrategy()

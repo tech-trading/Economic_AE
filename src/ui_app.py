@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -39,6 +40,19 @@ def run_module(module: str, extra_env: dict[str, str] | None = None) -> tuple[in
         env.update(extra_env)
 
     cmd = [sys.executable, "-m", module]
+    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True)
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    return proc.returncode, output.strip()
+
+
+def run_script(script_rel_path: str, args: list[str] | None = None, extra_env: dict[str, str] | None = None) -> tuple[int, str]:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
+    cmd = [sys.executable, script_rel_path]
+    if args:
+        cmd.extend(args)
     proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True)
     output = (proc.stdout or "") + "\n" + (proc.stderr or "")
     return proc.returncode, output.strip()
@@ -871,6 +885,20 @@ def main() -> None:
                     "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
                     "DONCHIAN_CONFIRM_TICKS": parse_int(env_vals.get("DONCHIAN_CONFIRM_TICKS"), 1),
                     "DONCHIAN_TRIGGER_QUANTILE": parse_float(env_vals.get("DONCHIAN_TRIGGER_QUANTILE"), 0.80),
+                    "DONCHIAN_SESSION_FILTER": env_vals.get("DONCHIAN_SESSION_FILTER", "false"),
+                    "DONCHIAN_SESSIONS": env_vals.get("DONCHIAN_SESSIONS", "london,ny"),
+                }
+            )
+        elif strategy_mode == "donchian_nylondon":
+            st.json(
+                {
+                    "DONCHIAN_LOOKBACK_SECONDS": parse_int(env_vals.get("DONCHIAN_LOOKBACK_SECONDS"), 600),
+                    "DONCHIAN_BREAKOUT_BUFFER_PIPS": parse_float(env_vals.get("DONCHIAN_BREAKOUT_BUFFER_PIPS"), 0.2),
+                    "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
+                    "DONCHIAN_CONFIRM_TICKS": parse_int(env_vals.get("DONCHIAN_CONFIRM_TICKS"), 1),
+                    "DONCHIAN_TRIGGER_QUANTILE": parse_float(env_vals.get("DONCHIAN_TRIGGER_QUANTILE"), 0.80),
+                    "DONCHIAN_SESSION_FILTER": "true",
+                    "DONCHIAN_SESSIONS": "london,ny",
                 }
             )
         else:
@@ -911,8 +939,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian"],
-            index=["default", "zscore", "momentum", "donchian"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
@@ -1008,6 +1036,17 @@ def main() -> None:
             step=0.01,
             format="%.2f",
         )
+        don_sessions = st.multiselect(
+            "DONCHIAN_SESSIONS",
+            options=["london", "ny"],
+            default=[s for s in str(env_vals.get("DONCHIAN_SESSIONS", "london,ny")).split(",") if s in {"london", "ny"}] or ["london", "ny"],
+            help="Solo aplica cuando DONCHIAN_SESSION_FILTER=true o estrategia donchian_nylondon.",
+        )
+        don_session_filter = st.selectbox(
+            "DONCHIAN_SESSION_FILTER",
+            options=["false", "true"],
+            index=1 if parse_bool(env_vals.get("DONCHIAN_SESSION_FILTER"), False) else 0,
+        )
         label_mode = st.selectbox(
             "Modo de etiquetado",
             options=["sign", "quantile", "quantile_monthly"],
@@ -1077,6 +1116,8 @@ def main() -> None:
             env_vals["DONCHIAN_MIN_CHANNEL_PIPS"] = f"{float(don_channel):.2f}"
             env_vals["DONCHIAN_CONFIRM_TICKS"] = str(int(don_confirm))
             env_vals["DONCHIAN_TRIGGER_QUANTILE"] = f"{float(don_quantile):.2f}"
+            env_vals["DONCHIAN_SESSION_FILTER"] = "true" if (strategy == "donchian_nylondon" or don_session_filter == "true") else "false"
+            env_vals["DONCHIAN_SESSIONS"] = ",".join(don_sessions) if don_sessions else "london,ny"
             env_vals["DIRECTION_LABEL_MODE"] = label_mode
             env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
             env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"
@@ -1179,6 +1220,76 @@ def main() -> None:
 
         st.markdown("### Visuales de backtest")
         render_walkforward_charts(PROJECT_ROOT / "models/walkforward_monthly_report.csv")
+
+        st.markdown("### Optimización Donchian")
+        don_events_csv = st.text_input(
+            "Events CSV sweep Donchian",
+            value=env_vals.get("EVENTS_CSV", "data/events.csv"),
+            key="don_sweep_events_csv",
+        )
+        don_market_csv = st.text_input(
+            "Market CSV sweep Donchian",
+            value=env_vals.get("MARKET_CSV", "data/market_ticks.csv"),
+            key="don_sweep_market_csv",
+        )
+        don_session_mode = st.selectbox(
+            "Sweep sesión",
+            options=["both", "on", "off"],
+            index=0,
+            help="both prueba normal y NY/Londres; on solo NY/Londres; off solo Donchian normal.",
+            key="don_sweep_session_mode",
+        )
+        don_quick = st.checkbox(
+            "Sweep rápido",
+            value=True,
+            help="Reduce combinaciones para terminar más rápido.",
+            key="don_sweep_quick",
+        )
+
+        result_path = PROJECT_ROOT / "models/donchian_sweep_best.json"
+        col_s1, col_s2 = st.columns(2)
+        if col_s1.button("Ejecutar sweep Donchian"):
+            code, out = run_script(
+                "scripts/sweep_donchian.py",
+                args=[
+                    "--events-csv",
+                    don_events_csv,
+                    "--market-csv",
+                    don_market_csv,
+                    "--session-filter",
+                    don_session_mode,
+                    "--output",
+                    str(result_path),
+                ] + (["--quick"] if don_quick else []),
+            )
+            st.code(out)
+            st.info(f"Exit code: {code}")
+
+        if result_path.exists():
+            try:
+                sweep_data = json.loads(result_path.read_text(encoding="utf-8"))
+                st.json(sweep_data.get("best", {}))
+            except Exception as ex:
+                st.warning(f"No se pudo leer resultado sweep: {ex}")
+                sweep_data = {}
+        else:
+            sweep_data = {}
+
+        if col_s2.button("Aplicar mejor Donchian a .env"):
+            if not sweep_data or "best" not in sweep_data:
+                st.warning("No hay resultado de sweep para aplicar. Ejecuta primero el sweep.")
+            else:
+                best = sweep_data["best"]
+                env_vals["STRATEGY"] = "donchian_nylondon" if bool(best.get("session_filter", False)) else "donchian"
+                env_vals["DONCHIAN_LOOKBACK_SECONDS"] = str(int(best.get("lookback", 600)))
+                env_vals["DONCHIAN_BREAKOUT_BUFFER_PIPS"] = f"{float(best.get('buffer', 0.2)):.2f}"
+                env_vals["DONCHIAN_MIN_CHANNEL_PIPS"] = f"{float(best.get('min_channel', 1.0)):.2f}"
+                env_vals["DONCHIAN_CONFIRM_TICKS"] = str(int(best.get("confirm_ticks", 1)))
+                env_vals["DONCHIAN_TRIGGER_QUANTILE"] = f"{float(best.get('quantile', 0.80)):.2f}"
+                env_vals["DONCHIAN_SESSION_FILTER"] = "true" if bool(best.get("session_filter", False)) else "false"
+                env_vals["DONCHIAN_SESSIONS"] = str(best.get("sessions", "london,ny"))
+                save_env(env_vals)
+                st.success("Mejor configuración Donchian aplicada en .env")
 
     with tab_live:
         st.subheader("Operación real")

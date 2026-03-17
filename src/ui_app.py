@@ -102,10 +102,22 @@ def parse_bool(value: str | None, default: bool) -> bool:
 def _is_pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            text = (out.stdout or "").strip().lower()
+            return ("no tasks are running" not in text) and (str(pid) in text)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
-    except OSError:
+    except (OSError, SystemError):
         return False
 
 

@@ -603,6 +603,7 @@ def enrich_trade_history_with_results(trades: pd.DataFrame, market_path: Path) -
 
 def render_live_status_panel(live_activity_path: Path, daily_report_path: Path) -> None:
     st.markdown("### Estado LIVE en tiempo real")
+    live_pid = get_live_bot_pid()
 
     report_obj: dict[str, object] = {}
     if daily_report_path.exists():
@@ -619,14 +620,17 @@ def render_live_status_panel(live_activity_path: Path, daily_report_path: Path) 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Archivo actividad", "OK" if live_activity_path.exists() else "Missing")
     c2.metric("Reporte diario", "OK" if daily_report_path.exists() else "Missing")
+    c3.metric("Proceso bot", "RUNNING" if live_pid else "STOPPED")
+    c4.metric("PID bot", str(live_pid) if live_pid else "N/A")
 
     if not activity.empty:
         last_row = activity.iloc[-1]
-        c3.metric("Última acción", str(last_row.get("action", "N/A")))
-        c4.metric("Último evento UTC", str(last_row.get("time_utc", "N/A")))
+        st.caption(
+            f"Última acción: {str(last_row.get('action', 'N/A'))} | "
+            f"Último evento UTC: {str(last_row.get('time_utc', 'N/A'))}"
+        )
     else:
-        c3.metric("Última acción", "N/A")
-        c4.metric("Último evento UTC", "N/A")
+        st.caption("Última acción: N/A | Último evento UTC: N/A")
 
     if report_obj:
         st.caption(
@@ -652,17 +656,20 @@ def render_live_status_panel(live_activity_path: Path, daily_report_path: Path) 
         and recent["action"].astype(str).isin(["calendar_refresh", "no_upcoming_events"]).all()
     )
 
-    if has_recent_heartbeat and has_recent_refresh and (not has_calendar_error):
+    if (live_pid is not None) and has_recent_heartbeat and has_recent_refresh and (not has_calendar_error):
         health_state = "VERDE"
         health_msg = "Bot activo y refrescando calendario con normalidad."
         st.success(f"Semáforo LIVE: {health_state} | {health_msg}")
-    elif has_recent_heartbeat and (only_no_events or not has_recent_refresh):
+    elif (live_pid is not None) and has_recent_heartbeat and (only_no_events or not has_recent_refresh):
         health_state = "AMARILLO"
         health_msg = "Bot activo, pero sin eventos operables recientes."
         st.warning(f"Semáforo LIVE: {health_state} | {health_msg}")
     else:
         health_state = "ROJO"
-        health_msg = "Actividad estancada o error de calendario. Revisar conectividad/fuente de eventos."
+        if live_pid is None:
+            health_msg = "Bot detenido o sin PID válido."
+        else:
+            health_msg = "Actividad estancada o error de calendario. Revisar conectividad/fuente de eventos."
         st.error(f"Semáforo LIVE: {health_state} | {health_msg}")
 
     s1, s2, s3 = st.columns(3)
@@ -962,7 +969,7 @@ def main() -> None:
                 {
                     "DONCHIAN_LOOKBACK_SECONDS": parse_int(env_vals.get("DONCHIAN_LOOKBACK_SECONDS"), 600),
                     "DONCHIAN_BREAKOUT_BUFFER_PIPS": parse_float(env_vals.get("DONCHIAN_BREAKOUT_BUFFER_PIPS"), 0.2),
-                    "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
+                    "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 0.1),
                     "DONCHIAN_CONFIRM_TICKS": parse_int(env_vals.get("DONCHIAN_CONFIRM_TICKS"), 1),
                     "DONCHIAN_TRIGGER_QUANTILE": parse_float(env_vals.get("DONCHIAN_TRIGGER_QUANTILE"), 0.80),
                     "DONCHIAN_SESSION_FILTER": env_vals.get("DONCHIAN_SESSION_FILTER", "false"),
@@ -974,7 +981,7 @@ def main() -> None:
                 {
                     "DONCHIAN_LOOKBACK_SECONDS": parse_int(env_vals.get("DONCHIAN_LOOKBACK_SECONDS"), 600),
                     "DONCHIAN_BREAKOUT_BUFFER_PIPS": parse_float(env_vals.get("DONCHIAN_BREAKOUT_BUFFER_PIPS"), 0.2),
-                    "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
+                    "DONCHIAN_MIN_CHANNEL_PIPS": parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 0.1),
                     "DONCHIAN_CONFIRM_TICKS": parse_int(env_vals.get("DONCHIAN_CONFIRM_TICKS"), 1),
                     "DONCHIAN_TRIGGER_QUANTILE": parse_float(env_vals.get("DONCHIAN_TRIGGER_QUANTILE"), 0.80),
                     "DONCHIAN_SESSION_FILTER": "true",
@@ -1096,9 +1103,9 @@ def main() -> None:
         )
         don_channel = st.number_input(
             "DONCHIAN_MIN_CHANNEL_PIPS",
-            min_value=0.5,
+            min_value=0.1,
             max_value=100.0,
-            value=parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 1.0),
+            value=parse_float(env_vals.get("DONCHIAN_MIN_CHANNEL_PIPS"), 0.1),
             step=0.5,
         )
         don_confirm = st.number_input(

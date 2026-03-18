@@ -1261,3 +1261,8 @@ time_utc,mode,strategy,symbol,action,event_id,detail,policy
 2026-03-18T16:28:53.166911+00:00,LIVE,agentic_hybrid,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-03-18T16:29:13.213501+00:00,LIVE,agentic_hybrid,EURUSD,skip_max_open_positions,eventless_1773851353,open_positions=1,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-03-18T16:29:33.257425+00:00,LIVE,agentic_hybrid,EURUSD,skip_max_open_positions,eventless_1773851373,open_positions=1,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T16:31:19.780016+00:00,LIVE,ema_rsi_trend,EURUSD,calendar_refresh,,events=2506,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T16:31:20.699993+00:00,LIVE,ema_rsi_trend,EURUSD,order_sent_eventless,eventless_1773851479,"side=BUY,confidence=0.8746","{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T16:31:41.388566+00:00,LIVE,ema_rsi_trend,EURUSD,order_sent_eventless,eventless_1773851500,"side=BUY,confidence=0.8464","{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T16:32:01.667914+00:00,LIVE,ema_rsi_trend,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T16:32:21.704017+00:00,LIVE,ema_rsi_trend,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"

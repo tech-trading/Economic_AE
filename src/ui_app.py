@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 import signal
+import time
+from datetime import timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -97,6 +99,107 @@ def parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_event_datetime_column(events: pd.DataFrame) -> str | None:
+    for col in ["date_utc", "datetime_utc", "time_utc", "event_time_utc"]:
+        if col in events.columns:
+            return col
+    return None
+
+
+def _is_in_session_window(ts_utc: pd.Timestamp, sessions_raw: str) -> bool:
+    sessions = {s.strip().lower() for s in str(sessions_raw or "").split(",") if s.strip()}
+    if not sessions:
+        sessions = {"london", "ny"}
+    if "all" in sessions:
+        return True
+
+    hour = int(ts_utc.hour)
+    in_london = 6 <= hour <= 11
+    in_ny = 12 <= hour <= 17
+
+    london_alias = {"london", "ldn"}
+    ny_alias = {"ny", "newyork", "new_york", "new-york", "us"}
+    use_london = bool(sessions.intersection(london_alias))
+    use_ny = bool(sessions.intersection(ny_alias))
+    return (use_london and in_london) or (use_ny and in_ny)
+
+
+def _format_countdown(seconds_left: float) -> str:
+    sec = max(0, int(seconds_left))
+    hh = sec // 3600
+    mm = (sec % 3600) // 60
+    ss = sec % 60
+    return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+
+def get_next_trigger_info(
+    *,
+    events_csv_path: Path,
+    strategy_mode: str,
+    seconds_before_event: int,
+    event_min_importance: int,
+    utc_offset_hours: float,
+    donchian_session_filter: bool,
+    donchian_sessions: str,
+) -> dict[str, object]:
+    if not events_csv_path.exists():
+        return {"status": "missing_events", "path": str(events_csv_path)}
+
+    try:
+        events = pd.read_csv(events_csv_path)
+    except Exception as ex:
+        return {"status": "read_error", "path": str(events_csv_path), "error": str(ex)}
+
+    dt_col = _resolve_event_datetime_column(events)
+    if not dt_col:
+        return {"status": "missing_datetime_col", "path": str(events_csv_path), "columns": list(events.columns)}
+
+    events[dt_col] = pd.to_datetime(events[dt_col], utc=True, errors="coerce")
+    events = events.dropna(subset=[dt_col]).sort_values(dt_col)
+    now_utc = pd.Timestamp.now(tz="UTC")
+    upcoming = events[events[dt_col] > now_utc].copy()
+
+    if "importance" in upcoming.columns:
+        imp = pd.to_numeric(upcoming["importance"], errors="coerce")
+        upcoming = upcoming[imp >= float(event_min_importance)]
+
+    session_filter_on = donchian_session_filter or (strategy_mode == "donchian_nylondon")
+    if session_filter_on:
+        upcoming = upcoming[upcoming[dt_col].apply(lambda ts: _is_in_session_window(ts, donchian_sessions))]
+
+    if upcoming.empty:
+        return {
+            "status": "no_upcoming",
+            "path": str(events_csv_path),
+            "session_filter_on": session_filter_on,
+        }
+
+    next_event = upcoming.iloc[0]
+    event_time_utc = pd.to_datetime(next_event[dt_col], utc=True, errors="coerce")
+    if pd.isna(event_time_utc):
+        return {"status": "invalid_event_time", "path": str(events_csv_path)}
+    trigger_utc = event_time_utc - pd.Timedelta(seconds=int(seconds_before_event))
+    local_tz = timezone(timedelta(hours=float(utc_offset_hours)))
+    event_local = event_time_utc.tz_convert(local_tz)
+    trigger_local = trigger_utc.tz_convert(local_tz)
+    countdown_seconds = float((trigger_utc - now_utc).total_seconds())
+
+    return {
+        "status": "ok",
+        "path": str(events_csv_path),
+        "event_name": str(next_event.get("name", "N/A")),
+        "event_currency": str(next_event.get("currency", "N/A")),
+        "event_importance": str(next_event.get("importance", "N/A")),
+        "event_time_utc": event_time_utc,
+        "trigger_utc": trigger_utc,
+        "event_time_local": event_local,
+        "trigger_local": trigger_local,
+        "countdown": _format_countdown(countdown_seconds),
+        "session_filter_on": session_filter_on,
+        "donchian_sessions": donchian_sessions,
+    }
 
 
 def _is_pid_running(pid: int) -> bool:
@@ -613,7 +716,18 @@ def enrich_trade_history_with_results(trades: pd.DataFrame, market_path: Path) -
 
     return out
 
-def render_live_status_panel(live_activity_path: Path, daily_report_path: Path) -> None:
+def render_live_status_panel(
+    live_activity_path: Path,
+    daily_report_path: Path,
+    *,
+    strategy_mode: str,
+    events_csv: str,
+    seconds_before_event: int,
+    event_min_importance: int,
+    utc_offset_hours: float,
+    donchian_session_filter: bool,
+    donchian_sessions: str,
+) -> None:
     st.markdown("### Estado LIVE en tiempo real")
     live_pid = get_live_bot_pid()
 
@@ -634,6 +748,43 @@ def render_live_status_panel(live_activity_path: Path, daily_report_path: Path) 
     c2.metric("Reporte diario", "OK" if daily_report_path.exists() else "Missing")
     c3.metric("Proceso bot", "RUNNING" if live_pid else "STOPPED")
     c4.metric("PID bot", str(live_pid) if live_pid else "N/A")
+
+    events_path = Path(events_csv)
+    if not events_path.is_absolute():
+        events_path = PROJECT_ROOT / events_path
+    next_trigger = get_next_trigger_info(
+        events_csv_path=events_path,
+        strategy_mode=strategy_mode,
+        seconds_before_event=seconds_before_event,
+        event_min_importance=event_min_importance,
+        utc_offset_hours=utc_offset_hours,
+        donchian_session_filter=donchian_session_filter,
+        donchian_sessions=donchian_sessions,
+    )
+
+    st.markdown("#### Proximo trigger")
+    next_status = str(next_trigger.get("status", "unknown"))
+    if next_status == "ok":
+        t1, t2, t3, t4 = st.columns(4)
+        t1.metric("Countdown", str(next_trigger.get("countdown", "N/A")))
+        t2.metric("Trigger UTC", str(next_trigger.get("trigger_utc", "N/A")))
+        t3.metric("Trigger local", str(next_trigger.get("trigger_local", "N/A")))
+        t4.metric("Evento", f"{next_trigger.get('event_currency', 'N/A')} | imp {next_trigger.get('event_importance', 'N/A')}")
+        st.caption(
+            f"{next_trigger.get('event_name', 'N/A')} | event_utc={next_trigger.get('event_time_utc', 'N/A')} | "
+            f"event_local={next_trigger.get('event_time_local', 'N/A')}"
+        )
+    elif next_status == "no_upcoming":
+        st.info(
+            "No hay eventos próximos que cumplan filtros actuales "
+            f"(importance>={event_min_importance}, sesiones={donchian_sessions if (donchian_session_filter or strategy_mode == 'donchian_nylondon') else 'todas'})."
+        )
+    elif next_status == "missing_events":
+        st.warning(f"No se encontró archivo de eventos: {next_trigger.get('path', 'N/A')}")
+    elif next_status == "missing_datetime_col":
+        st.warning("El archivo de eventos no tiene columna datetime compatible (date_utc/datetime_utc/time_utc/event_time_utc).")
+    else:
+        st.warning(f"No se pudo calcular el próximo trigger: {next_trigger.get('error', 'error desconocido')}")
 
     if not activity.empty:
         last_row = activity.iloc[-1]
@@ -1394,12 +1545,40 @@ def main() -> None:
         st.subheader("Operación real")
         st.write("Esta sección está orientada a producción. Verifica Modo de ejecución=LIVE antes de arrancar.")
 
+        live_auto_refresh = st.toggle(
+            "Auto-actualizar panel LIVE",
+            value=bool(st.session_state.get("live_auto_refresh", False)),
+            key="live_auto_refresh",
+            help="Si está activo, refresca el panel automáticamente para actualizar countdown y estado.",
+        )
+        refresh_interval = st.slider(
+            "Intervalo auto-refresh (segundos)",
+            min_value=5,
+            max_value=60,
+            value=int(st.session_state.get("live_refresh_seconds", 10)),
+            step=1,
+            key="live_refresh_seconds",
+            help="Frecuencia de actualización automática del panel LIVE.",
+        )
+
         if st.button("Actualizar estado LIVE"):
             st.rerun()
         render_live_status_panel(
             PROJECT_ROOT / settings.live_activity_csv,
             PROJECT_ROOT / settings.model_dir / "daily_live_report.json",
+            strategy_mode=strategy_mode,
+            events_csv=env_vals.get("EVENTS_CSV", settings.events_csv),
+            seconds_before_event=parse_int(env_vals.get("SECONDS_BEFORE_EVENT"), settings.seconds_before_event),
+            event_min_importance=parse_int(env_vals.get("EVENT_MIN_IMPORTANCE"), settings.event_min_importance),
+            utc_offset_hours=utc_offset_hours,
+            donchian_session_filter=parse_bool(env_vals.get("DONCHIAN_SESSION_FILTER"), settings.donchian_session_filter),
+            donchian_sessions=env_vals.get("DONCHIAN_SESSIONS", settings.donchian_sessions),
         )
+
+        if live_auto_refresh:
+            st.caption(f"Auto-refresh activo: próxima actualización en {refresh_interval}s")
+            time.sleep(float(refresh_interval))
+            st.rerun()
 
         st.caption(f"Modo actual detectado en configuración: {'PAPER' if paper_mode else 'LIVE'}")
         if paper_mode:

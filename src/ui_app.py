@@ -144,6 +144,9 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
+    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+        return {"status": "eventless_strategy", "path": str(events_csv_path)}
+
     if not events_csv_path.exists():
         return {"status": "missing_events", "path": str(events_csv_path)}
 
@@ -779,6 +782,8 @@ def render_live_status_panel(
             "No hay eventos próximos que cumplan filtros actuales "
             f"(importance>={event_min_importance}, sesiones={donchian_sessions if (donchian_session_filter or strategy_mode == 'donchian_nylondon') else 'todas'})."
         )
+    elif next_status == "eventless_strategy":
+        st.info("La estrategia activa opera en modo continuo (eventless): no depende de calendario para abrir operaciones.")
     elif next_status == "missing_events":
         st.warning(f"No se encontró archivo de eventos: {next_trigger.get('path', 'N/A')}")
     elif next_status == "missing_datetime_col":
@@ -1151,6 +1156,35 @@ def main() -> None:
                     "DONCHIAN_SESSIONS": "london,ny",
                 }
             )
+        elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi"}:
+            st.json(
+                {
+                    "EMA_FAST_SPAN": parse_int(env_vals.get("EMA_FAST_SPAN"), 21),
+                    "EMA_SLOW_SPAN": parse_int(env_vals.get("EMA_SLOW_SPAN"), 55),
+                    "EMA_RSI_PERIOD": parse_int(env_vals.get("EMA_RSI_PERIOD"), 14),
+                    "EMA_RSI_BUY_LEVEL": parse_float(env_vals.get("EMA_RSI_BUY_LEVEL"), 56.0),
+                    "EMA_RSI_SELL_LEVEL": parse_float(env_vals.get("EMA_RSI_SELL_LEVEL"), 44.0),
+                    "EMA_MIN_SEPARATION_PIPS": parse_float(env_vals.get("EMA_MIN_SEPARATION_PIPS"), 0.20),
+                    "EMA_MOMENTUM_LOOKBACK_TICKS": parse_int(env_vals.get("EMA_MOMENTUM_LOOKBACK_TICKS"), 20),
+                    "EMA_MIN_MOMENTUM_PIPS": parse_float(env_vals.get("EMA_MIN_MOMENTUM_PIPS"), 0.25),
+                    "EMA_VOL_PERIOD": parse_int(env_vals.get("EMA_VOL_PERIOD"), 40),
+                    "EMA_MIN_VOL_PIPS": parse_float(env_vals.get("EMA_MIN_VOL_PIPS"), 0.05),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
+        elif strategy_mode in {"agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+            st.json(
+                {
+                    "AGENTIC_MODE": "multi-agent orchestration (EMA+RSI + Donchian)",
+                    "AGENTIC_LEARNING_RATE": parse_float(env_vals.get("AGENTIC_LEARNING_RATE"), 0.20),
+                    "AGENTIC_EXPLORE_PROB": parse_float(env_vals.get("AGENTIC_EXPLORE_PROB"), 0.10),
+                    "AGENTIC_MIN_CONFIDENCE": parse_float(env_vals.get("AGENTIC_MIN_CONFIDENCE"), 0.56),
+                    "AGENTIC_REWARD_HORIZON_SECONDS": parse_int(env_vals.get("AGENTIC_REWARD_HORIZON_SECONDS"), 45),
+                    "AGENTIC_REWARD_TARGET_PIPS": parse_float(env_vals.get("AGENTIC_REWARD_TARGET_PIPS"), 1.20),
+                    "AGENTIC_STATE_PATH": env_vals.get("AGENTIC_STATE_PATH", "models/agentic_state.json"),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
         else:
             st.caption("Usando estrategia base de ensemble (tabular + LSTM cuando esté disponible).")
 
@@ -1189,8 +1223,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
@@ -1297,6 +1331,133 @@ def main() -> None:
             options=["false", "true"],
             index=1 if parse_bool(env_vals.get("DONCHIAN_SESSION_FILTER"), False) else 0,
         )
+        st.markdown("### Parámetros EMA + RSI (estrategia activa)")
+        ema_fast_span = st.number_input(
+            "EMA_FAST_SPAN",
+            min_value=3,
+            max_value=200,
+            value=parse_int(env_vals.get("EMA_FAST_SPAN"), 21),
+            step=1,
+        )
+        ema_slow_span = st.number_input(
+            "EMA_SLOW_SPAN",
+            min_value=5,
+            max_value=400,
+            value=parse_int(env_vals.get("EMA_SLOW_SPAN"), 55),
+            step=1,
+        )
+        ema_rsi_period = st.number_input(
+            "EMA_RSI_PERIOD",
+            min_value=5,
+            max_value=100,
+            value=parse_int(env_vals.get("EMA_RSI_PERIOD"), 14),
+            step=1,
+        )
+        ema_rsi_buy_level = st.number_input(
+            "EMA_RSI_BUY_LEVEL",
+            min_value=50.0,
+            max_value=90.0,
+            value=parse_float(env_vals.get("EMA_RSI_BUY_LEVEL"), 56.0),
+            step=0.5,
+        )
+        ema_rsi_sell_level = st.number_input(
+            "EMA_RSI_SELL_LEVEL",
+            min_value=10.0,
+            max_value=50.0,
+            value=parse_float(env_vals.get("EMA_RSI_SELL_LEVEL"), 44.0),
+            step=0.5,
+        )
+        ema_min_sep = st.number_input(
+            "EMA_MIN_SEPARATION_PIPS",
+            min_value=0.0,
+            max_value=20.0,
+            value=parse_float(env_vals.get("EMA_MIN_SEPARATION_PIPS"), 0.20),
+            step=0.05,
+            format="%.2f",
+        )
+        ema_mom_lb = st.number_input(
+            "EMA_MOMENTUM_LOOKBACK_TICKS",
+            min_value=3,
+            max_value=500,
+            value=parse_int(env_vals.get("EMA_MOMENTUM_LOOKBACK_TICKS"), 20),
+            step=1,
+        )
+        ema_min_mom = st.number_input(
+            "EMA_MIN_MOMENTUM_PIPS",
+            min_value=0.0,
+            max_value=20.0,
+            value=parse_float(env_vals.get("EMA_MIN_MOMENTUM_PIPS"), 0.25),
+            step=0.05,
+            format="%.2f",
+        )
+        ema_vol_period = st.number_input(
+            "EMA_VOL_PERIOD",
+            min_value=8,
+            max_value=500,
+            value=parse_int(env_vals.get("EMA_VOL_PERIOD"), 40),
+            step=1,
+        )
+        ema_min_vol = st.number_input(
+            "EMA_MIN_VOL_PIPS",
+            min_value=0.0,
+            max_value=10.0,
+            value=parse_float(env_vals.get("EMA_MIN_VOL_PIPS"), 0.05),
+            step=0.01,
+            format="%.2f",
+        )
+        eventless_eval_seconds = st.number_input(
+            "EVENTLESS_EVAL_SECONDS",
+            min_value=5,
+            max_value=600,
+            value=parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+            step=1,
+            help="Frecuencia de evaluación en segundos cuando la estrategia opera sin eventos.",
+        )
+        st.markdown("### Parámetros Agentic IA")
+        agentic_learning_rate = st.number_input(
+            "AGENTIC_LEARNING_RATE",
+            min_value=0.01,
+            max_value=1.0,
+            value=parse_float(env_vals.get("AGENTIC_LEARNING_RATE"), 0.20),
+            step=0.01,
+            format="%.2f",
+        )
+        agentic_explore_prob = st.number_input(
+            "AGENTIC_EXPLORE_PROB",
+            min_value=0.0,
+            max_value=0.5,
+            value=parse_float(env_vals.get("AGENTIC_EXPLORE_PROB"), 0.10),
+            step=0.01,
+            format="%.2f",
+        )
+        agentic_min_conf = st.number_input(
+            "AGENTIC_MIN_CONFIDENCE",
+            min_value=0.50,
+            max_value=0.95,
+            value=parse_float(env_vals.get("AGENTIC_MIN_CONFIDENCE"), 0.56),
+            step=0.01,
+            format="%.2f",
+        )
+        agentic_horizon = st.number_input(
+            "AGENTIC_REWARD_HORIZON_SECONDS",
+            min_value=10,
+            max_value=600,
+            value=parse_int(env_vals.get("AGENTIC_REWARD_HORIZON_SECONDS"), 45),
+            step=1,
+        )
+        agentic_target_pips = st.number_input(
+            "AGENTIC_REWARD_TARGET_PIPS",
+            min_value=0.1,
+            max_value=20.0,
+            value=parse_float(env_vals.get("AGENTIC_REWARD_TARGET_PIPS"), 1.20),
+            step=0.1,
+            format="%.2f",
+        )
+        agentic_state_path = st.text_input(
+            "AGENTIC_STATE_PATH",
+            value=env_vals.get("AGENTIC_STATE_PATH", "models/agentic_state.json"),
+            help="Archivo donde Agentic IA guarda pesos aprendidos entre reinicios.",
+        )
         label_mode = st.selectbox(
             "Modo de etiquetado",
             options=["sign", "quantile", "quantile_monthly"],
@@ -1368,6 +1529,23 @@ def main() -> None:
             env_vals["DONCHIAN_TRIGGER_QUANTILE"] = f"{float(don_quantile):.2f}"
             env_vals["DONCHIAN_SESSION_FILTER"] = "true" if (strategy == "donchian_nylondon" or don_session_filter == "true") else "false"
             env_vals["DONCHIAN_SESSIONS"] = ",".join(don_sessions) if don_sessions else "london,ny"
+            env_vals["EMA_FAST_SPAN"] = str(int(ema_fast_span))
+            env_vals["EMA_SLOW_SPAN"] = str(int(ema_slow_span))
+            env_vals["EMA_RSI_PERIOD"] = str(int(ema_rsi_period))
+            env_vals["EMA_RSI_BUY_LEVEL"] = f"{float(ema_rsi_buy_level):.2f}"
+            env_vals["EMA_RSI_SELL_LEVEL"] = f"{float(ema_rsi_sell_level):.2f}"
+            env_vals["EMA_MIN_SEPARATION_PIPS"] = f"{float(ema_min_sep):.2f}"
+            env_vals["EMA_MOMENTUM_LOOKBACK_TICKS"] = str(int(ema_mom_lb))
+            env_vals["EMA_MIN_MOMENTUM_PIPS"] = f"{float(ema_min_mom):.2f}"
+            env_vals["EMA_VOL_PERIOD"] = str(int(ema_vol_period))
+            env_vals["EMA_MIN_VOL_PIPS"] = f"{float(ema_min_vol):.2f}"
+            env_vals["EVENTLESS_EVAL_SECONDS"] = str(int(eventless_eval_seconds))
+            env_vals["AGENTIC_LEARNING_RATE"] = f"{float(agentic_learning_rate):.2f}"
+            env_vals["AGENTIC_EXPLORE_PROB"] = f"{float(agentic_explore_prob):.2f}"
+            env_vals["AGENTIC_MIN_CONFIDENCE"] = f"{float(agentic_min_conf):.2f}"
+            env_vals["AGENTIC_REWARD_HORIZON_SECONDS"] = str(int(agentic_horizon))
+            env_vals["AGENTIC_REWARD_TARGET_PIPS"] = f"{float(agentic_target_pips):.2f}"
+            env_vals["AGENTIC_STATE_PATH"] = str(agentic_state_path).strip() or "models/agentic_state.json"
             env_vals["DIRECTION_LABEL_MODE"] = label_mode
             env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
             env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"
@@ -1576,9 +1754,16 @@ def main() -> None:
         )
 
         if live_auto_refresh:
-            st.caption(f"Auto-refresh activo: próxima actualización en {refresh_interval}s")
-            time.sleep(float(refresh_interval))
-            st.rerun()
+            if paper_mode:
+                st.caption("Auto-refresh en pausa: modo PAPER activo.")
+            else:
+                running_pid = get_live_bot_pid()
+                if running_pid:
+                    st.caption(f"Auto-refresh activo (PID {running_pid}): próxima actualización en {refresh_interval}s")
+                    time.sleep(float(refresh_interval))
+                    st.rerun()
+                else:
+                    st.caption("Auto-refresh en pausa: bot LIVE no está RUNNING.")
 
         st.caption(f"Modo actual detectado en configuración: {'PAPER' if paper_mode else 'LIVE'}")
         if paper_mode:

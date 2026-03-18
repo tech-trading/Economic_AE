@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import random
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from typing import Any
@@ -10,6 +13,7 @@ from src.mt5_executor import TradeDecision
 
 class Strategy:
     requires_models: bool = True
+    requires_event: bool = True
 
     def decide(self, event_row: pd.Series, ticks: pd.DataFrame, bundle: Any, tabular_models, lstm_model, feature_columns, policy: dict, settings) -> TradeDecision | None:  # pragma: no cover - simple interface
         raise NotImplementedError()
@@ -171,6 +175,274 @@ class MomentumStrategy(Strategy):
 
         side = "BUY" if combined >= 0 else "SELL"
         return TradeDecision(side=side, confidence=confidence, proba_buy=float(proba_buy))
+
+
+class EmaRsiTrendStrategy(Strategy):
+    requires_models: bool = False
+    requires_event: bool = False
+
+    def __init__(
+        self,
+        fast_span: int = 21,
+        slow_span: int = 55,
+        rsi_period: int = 14,
+        rsi_buy_level: float = 56.0,
+        rsi_sell_level: float = 44.0,
+        min_separation_pips: float = 0.20,
+        momentum_lookback_ticks: int = 20,
+        min_momentum_pips: float = 0.25,
+        vol_period: int = 40,
+        min_vol_pips: float = 0.05,
+    ):
+        self.fast_span = max(3, int(fast_span))
+        self.slow_span = max(self.fast_span + 2, int(slow_span))
+        self.rsi_period = max(5, int(rsi_period))
+        self.rsi_buy_level = float(np.clip(rsi_buy_level, 50.0, 80.0))
+        self.rsi_sell_level = float(np.clip(rsi_sell_level, 20.0, 50.0))
+        self.min_separation_pips = max(0.0, float(min_separation_pips))
+        self.momentum_lookback_ticks = max(3, int(momentum_lookback_ticks))
+        self.min_momentum_pips = max(0.0, float(min_momentum_pips))
+        self.vol_period = max(8, int(vol_period))
+        self.min_vol_pips = max(0.0, float(min_vol_pips))
+
+    @staticmethod
+    def _pip_size(symbol: str) -> float:
+        sym = str(symbol or "").upper()
+        return 0.01 if "JPY" in sym else 0.0001
+
+    def _compute_rsi(self, prices: pd.Series) -> float:
+        if prices is None or len(prices) < self.rsi_period + 2:
+            return 50.0
+        delta = prices.diff().dropna()
+        gain = delta.clip(lower=0.0)
+        loss = (-delta.clip(upper=0.0))
+        avg_gain = gain.ewm(alpha=1.0 / self.rsi_period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1.0 / self.rsi_period, adjust=False).mean()
+        rs = avg_gain.iloc[-1] / max(1e-12, avg_loss.iloc[-1])
+        rsi = 100.0 - (100.0 / (1.0 + rs))
+        return float(np.clip(rsi, 0.0, 100.0))
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        if ticks is None or ticks.empty or len(ticks) < max(self.slow_span + 5, self.vol_period + 5):
+            return None
+
+        df = ticks
+        if "time_utc" in df.columns and not df["time_utc"].is_monotonic_increasing:
+            df = df.sort_values("time_utc")
+
+        mid = ((df["bid"].astype(float) + df["ask"].astype(float)) / 2.0).dropna()
+        if len(mid) < max(self.slow_span + 5, self.vol_period + 5):
+            return None
+
+        pip = self._pip_size(getattr(settings, "symbol", "EURUSD"))
+        ema_fast = mid.ewm(span=self.fast_span, adjust=False).mean()
+        ema_slow = mid.ewm(span=self.slow_span, adjust=False).mean()
+
+        ema_gap_pips = float((ema_fast.iloc[-1] - ema_slow.iloc[-1]) / pip)
+        rsi = self._compute_rsi(mid)
+
+        lb = min(len(mid) - 1, self.momentum_lookback_ticks)
+        momentum_pips = float((mid.iloc[-1] - mid.iloc[-1 - lb]) / pip) if lb > 0 else 0.0
+
+        vol_pips = float((mid.diff().abs().rolling(self.vol_period).mean().iloc[-1]) / pip)
+        if not np.isfinite(vol_pips) or vol_pips < self.min_vol_pips:
+            return None
+
+        buy_ok = (
+            (ema_gap_pips >= self.min_separation_pips)
+            and (rsi >= self.rsi_buy_level)
+            and (momentum_pips >= self.min_momentum_pips)
+        )
+        sell_ok = (
+            (ema_gap_pips <= -self.min_separation_pips)
+            and (rsi <= self.rsi_sell_level)
+            and (momentum_pips <= -self.min_momentum_pips)
+        )
+
+        if buy_ok == sell_ok:
+            return None
+
+        side = "BUY" if buy_ok else "SELL"
+        direction = 1.0 if buy_ok else -1.0
+        strength_gap = min(1.0, abs(ema_gap_pips) / max(1e-6, self.min_separation_pips + 0.25))
+        strength_mom = min(1.0, abs(momentum_pips) / max(1e-6, self.min_momentum_pips + 0.35))
+        rsi_edge = abs(rsi - 50.0) / 50.0
+        confidence = float(np.clip(0.52 + 0.18 * strength_gap + 0.16 * strength_mom + 0.12 * rsi_edge, 0.52, 0.94))
+        if confidence < float(policy.get("decision_threshold", 0.5)):
+            return None
+
+        proba_buy = float(np.clip(0.5 + direction * min(0.45, 0.20 + 0.30 * confidence), 0.01, 0.99))
+        return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
+
+
+class AgenticHybridStrategy(Strategy):
+    requires_models: bool = False
+    requires_event: bool = False
+
+    def __init__(self, settings, policy: dict):
+        self.policy = policy
+        self.learning_rate = float(np.clip(getattr(settings, "agentic_learning_rate", 0.20), 0.01, 1.0))
+        self.explore_prob = float(np.clip(getattr(settings, "agentic_explore_prob", 0.10), 0.0, 0.5))
+        self.min_agent_confidence = float(np.clip(getattr(settings, "agentic_min_confidence", 0.56), 0.50, 0.95))
+        self.reward_horizon_seconds = max(10, int(getattr(settings, "agentic_reward_horizon_seconds", 45)))
+        self.reward_target_pips = max(0.5, float(getattr(settings, "agentic_reward_target_pips", 1.2)))
+
+        self.state_path = Path(str(getattr(settings, "agentic_state_path", "models/agentic_state.json")))
+        self.weights = {
+            "ema_rsi": 1.0,
+            "donchian": 1.0,
+        }
+        self.agent_counts = {"ema_rsi": 0, "donchian": 0}
+        self.pending_trades: list[dict[str, Any]] = []
+
+        self.ema_agent = EmaRsiTrendStrategy(
+            fast_span=int(settings.ema_fast_span),
+            slow_span=int(settings.ema_slow_span),
+            rsi_period=int(settings.ema_rsi_period),
+            rsi_buy_level=float(settings.ema_rsi_buy_level),
+            rsi_sell_level=float(settings.ema_rsi_sell_level),
+            min_separation_pips=float(settings.ema_min_separation_pips),
+            momentum_lookback_ticks=int(settings.ema_momentum_lookback_ticks),
+            min_momentum_pips=float(settings.ema_min_momentum_pips),
+            vol_period=int(settings.ema_vol_period),
+            min_vol_pips=float(settings.ema_min_vol_pips),
+        )
+        self.donchian_agent = DonchianBreakoutStrategy(
+            lookback_seconds=int(settings.donchian_lookback_seconds),
+            breakout_buffer_pips=float(settings.donchian_breakout_buffer_pips),
+            min_channel_pips=float(settings.donchian_min_channel_pips),
+            confirm_ticks=int(settings.donchian_confirm_ticks),
+            trigger_quantile=float(settings.donchian_trigger_quantile),
+            session_filter=False,
+            sessions="london,ny",
+        )
+
+        self._load_state()
+
+    @staticmethod
+    def _pip_size(symbol: str) -> float:
+        sym = str(symbol or "").upper()
+        return 0.01 if "JPY" in sym else 0.0001
+
+    def _load_state(self) -> None:
+        if not self.state_path.exists():
+            return
+        try:
+            obj = json.loads(self.state_path.read_text(encoding="utf-8"))
+            w = obj.get("weights", {})
+            c = obj.get("counts", {})
+            for k in self.weights:
+                if k in w:
+                    self.weights[k] = float(w[k])
+                if k in c:
+                    self.agent_counts[k] = int(c[k])
+        except Exception:
+            return
+
+    def _save_state(self) -> None:
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "weights": self.weights,
+                "counts": self.agent_counts,
+            }
+            self.state_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        except Exception:
+            return
+
+    def _update_rewards(self, current_time: pd.Timestamp, current_mid: float, pip: float) -> None:
+        if not self.pending_trades:
+            return
+
+        still_open: list[dict[str, Any]] = []
+        changed = False
+        for tr in self.pending_trades:
+            due = tr["due_time"]
+            if current_time < due:
+                still_open.append(tr)
+                continue
+
+            direction = 1.0 if tr["side"] == "BUY" else -1.0
+            ret_pips = ((current_mid - tr["entry_mid"]) * direction) / max(1e-12, pip)
+            reward = float(np.tanh(ret_pips / self.reward_target_pips))
+
+            k = tr["agent"]
+            old_w = float(self.weights.get(k, 1.0))
+            new_w = float(np.clip(old_w + (self.learning_rate * reward), 0.20, 5.00))
+            self.weights[k] = new_w
+            self.agent_counts[k] = int(self.agent_counts.get(k, 0)) + 1
+            changed = True
+
+        self.pending_trades = still_open
+        if changed:
+            self._save_state()
+
+    def _choose_agent(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(candidates) == 1:
+            return candidates[0]
+
+        if random.random() < self.explore_prob:
+            return random.choice(candidates)
+
+        total_w = float(sum(max(1e-6, self.weights.get(c["agent"], 1.0)) for c in candidates))
+        scored = []
+        for c in candidates:
+            w_norm = float(self.weights.get(c["agent"], 1.0)) / max(1e-9, total_w)
+            edge = abs(float(c["decision"].proba_buy) - 0.5)
+            score = (0.70 * w_norm) + (0.25 * float(c["decision"].confidence)) + (0.05 * edge)
+            scored.append((score, c))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return scored[0][1]
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        if ticks is None or ticks.empty:
+            return None
+
+        df = ticks
+        if "time_utc" in df.columns and not df["time_utc"].is_monotonic_increasing:
+            df = df.sort_values("time_utc")
+
+        mid = ((df["bid"].astype(float) + df["ask"].astype(float)) / 2.0).dropna()
+        if mid.empty:
+            return None
+
+        if "time_utc" in df.columns:
+            now_ts = pd.to_datetime(df["time_utc"].iloc[-1], utc=True, errors="coerce")
+            if pd.isna(now_ts):
+                now_ts = pd.Timestamp.now(tz="UTC")
+        else:
+            now_ts = pd.Timestamp.now(tz="UTC")
+
+        pip = self._pip_size(getattr(settings, "symbol", "EURUSD"))
+        current_mid = float(mid.iloc[-1])
+        self._update_rewards(now_ts, current_mid, pip)
+
+        candidates: list[dict[str, Any]] = []
+        dec_ema = self.ema_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+        if dec_ema is not None and float(dec_ema.confidence) >= self.min_agent_confidence:
+            candidates.append({"agent": "ema_rsi", "decision": dec_ema})
+
+        dec_don = self.donchian_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+        if dec_don is not None and float(dec_don.confidence) >= self.min_agent_confidence:
+            candidates.append({"agent": "donchian", "decision": dec_don})
+
+        if not candidates:
+            return None
+
+        selected = self._choose_agent(candidates)
+        decision = selected["decision"]
+        if float(decision.confidence) < float(self.policy.get("decision_threshold", 0.5)):
+            return None
+
+        self.pending_trades.append(
+            {
+                "agent": selected["agent"],
+                "side": str(decision.side),
+                "entry_mid": current_mid,
+                "due_time": now_ts + pd.Timedelta(seconds=self.reward_horizon_seconds),
+            }
+        )
+        return decision
 
 
 class DonchianBreakoutStrategy(Strategy):
@@ -336,5 +608,20 @@ def get_strategy(name: str, settings, policy: dict) -> Strategy:
             session_filter=True,
             sessions="london,ny",
         )
+    if name in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi"}:
+        return EmaRsiTrendStrategy(
+            fast_span=int(settings.ema_fast_span),
+            slow_span=int(settings.ema_slow_span),
+            rsi_period=int(settings.ema_rsi_period),
+            rsi_buy_level=float(settings.ema_rsi_buy_level),
+            rsi_sell_level=float(settings.ema_rsi_sell_level),
+            min_separation_pips=float(settings.ema_min_separation_pips),
+            momentum_lookback_ticks=int(settings.ema_momentum_lookback_ticks),
+            min_momentum_pips=float(settings.ema_min_momentum_pips),
+            vol_period=int(settings.ema_vol_period),
+            min_vol_pips=float(settings.ema_min_vol_pips),
+        )
+    if name in {"agentic", "agentic_hybrid", "agentic_ai", "multi_agent"}:
+        return AgenticHybridStrategy(settings=settings, policy=policy)
     # default fallback
     return DefaultStrategy()

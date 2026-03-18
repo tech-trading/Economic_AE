@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 import json
 import os
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,7 @@ class LiveTrader:
             print(f"Starting live trader in {mode} mode with policy {self.policy}...")
             events = self._refresh_events()
             last_refresh_utc = datetime.now(timezone.utc)
+            last_eventless_eval_utc = datetime.min.replace(tzinfo=timezone.utc)
 
             already_traded_event_ids: set[str] = set()
 
@@ -50,6 +52,41 @@ class LiveTrader:
                 if (now - last_refresh_utc).total_seconds() >= max(10, settings.live_calendar_refresh_seconds):
                     events = self._refresh_events()
                     last_refresh_utc = now
+
+                self.executor.apply_trailing_stop(settings.symbol)
+
+                if not self.strategy.requires_event:
+                    elapsed = (now - last_eventless_eval_utc).total_seconds()
+                    if elapsed >= max(5, int(settings.eventless_eval_seconds)):
+                        pseudo_event = pd.Series(
+                            {
+                                "event_id": f"eventless_{int(now.timestamp())}",
+                                "date_utc": now.isoformat(),
+                                "name": "Eventless strategy tick",
+                                "currency": str(settings.symbol)[:3],
+                                "importance": int(settings.event_min_importance),
+                            }
+                        )
+                        decision = self._build_decision(pseudo_event)
+                        if decision is not None:
+                            eventless_id = str(pseudo_event["event_id"])
+                            if settings.paper_trading:
+                                self._record_paper_trade(eventless_id, pseudo_event, decision)
+                                self._log_activity(action="paper_signal_eventless", event_id=eventless_id, detail=f"side={decision.side},confidence={decision.confidence:.4f}")
+                                print(f"[PAPER] Eventless signal: {decision}")
+                            else:
+                                open_positions = self.executor.count_open_positions(settings.symbol)
+                                if open_positions >= settings.max_open_positions:
+                                    self._log_activity(action="skip_max_open_positions", event_id=eventless_id, detail=f"open_positions={open_positions}")
+                                else:
+                                    self.executor.send_market_order(settings.symbol, decision)
+                                    self._log_activity(action="order_sent_eventless", event_id=eventless_id, detail=f"side={decision.side},confidence={decision.confidence:.4f}")
+                                    print(f"Sending eventless order: {decision}")
+                        else:
+                            self._log_activity(action="eventless_no_decision", detail="strategy_returned_none")
+                        last_eventless_eval_utc = now
+                    time.sleep(max(1, settings.live_loop_sleep_seconds))
+                    continue
 
                 upcoming = events[events["date_utc"].map(pd.Timestamp) > pd.Timestamp(now)]
                 if upcoming.empty:
@@ -62,8 +99,6 @@ class LiveTrader:
                 event_id = str(next_event["event_id"])
                 event_time = pd.to_datetime(next_event["date_utc"], utc=True).to_pydatetime()
                 trigger_time = event_time - pd.Timedelta(seconds=settings.seconds_before_event)
-
-                self.executor.apply_trailing_stop(settings.symbol)
 
                 if event_id not in already_traded_event_ids and now >= trigger_time and now < event_time:
                     decision = self._build_decision(next_event)
@@ -144,10 +179,13 @@ class LiveTrader:
         if ticks.empty:
             return None
 
-        event_df = pd.DataFrame([event_row.to_dict()])
-        bundle = build_event_dataset(event_df, ticks, lookback_seconds=settings.lookback_seconds)
-        if self.strategy.requires_models and bundle.X_tabular.empty:
-            return None
+        if self.strategy.requires_models:
+            event_df = pd.DataFrame([event_row.to_dict()])
+            bundle = build_event_dataset(event_df, ticks, lookback_seconds=settings.lookback_seconds)
+            if bundle.X_tabular.empty:
+                return None
+        else:
+            bundle = SimpleNamespace(X_tabular=pd.DataFrame(), X_seq=np.zeros((1, 1, 1), dtype=np.float32))
         # delegate to selected strategy
         return self.strategy.decide(event_row, ticks, bundle, self.tabular_models, self.lstm_model, self.feature_columns, self.policy, settings)
 

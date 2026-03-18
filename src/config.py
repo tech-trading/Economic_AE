@@ -54,6 +54,26 @@ class Settings:
     donchian_session_filter: bool = os.getenv("DONCHIAN_SESSION_FILTER", "false").strip().lower() in {"1", "true", "yes", "y"}
     donchian_sessions: str = os.getenv("DONCHIAN_SESSIONS", "london,ny")
 
+    # EMA + RSI trend strategy (eventless-capable)
+    ema_fast_span: int = int(os.getenv("EMA_FAST_SPAN", "21"))
+    ema_slow_span: int = int(os.getenv("EMA_SLOW_SPAN", "55"))
+    ema_rsi_period: int = int(os.getenv("EMA_RSI_PERIOD", "14"))
+    ema_rsi_buy_level: float = float(os.getenv("EMA_RSI_BUY_LEVEL", "56"))
+    ema_rsi_sell_level: float = float(os.getenv("EMA_RSI_SELL_LEVEL", "44"))
+    ema_min_separation_pips: float = float(os.getenv("EMA_MIN_SEPARATION_PIPS", "0.20"))
+    ema_momentum_lookback_ticks: int = int(os.getenv("EMA_MOMENTUM_LOOKBACK_TICKS", "20"))
+    ema_min_momentum_pips: float = float(os.getenv("EMA_MIN_MOMENTUM_PIPS", "0.25"))
+    ema_vol_period: int = int(os.getenv("EMA_VOL_PERIOD", "40"))
+    ema_min_vol_pips: float = float(os.getenv("EMA_MIN_VOL_PIPS", "0.05"))
+
+    # Agentic strategy (multi-agent orchestration)
+    agentic_learning_rate: float = float(os.getenv("AGENTIC_LEARNING_RATE", "0.20"))
+    agentic_explore_prob: float = float(os.getenv("AGENTIC_EXPLORE_PROB", "0.10"))
+    agentic_min_confidence: float = float(os.getenv("AGENTIC_MIN_CONFIDENCE", "0.56"))
+    agentic_reward_horizon_seconds: int = int(os.getenv("AGENTIC_REWARD_HORIZON_SECONDS", "45"))
+    agentic_reward_target_pips: float = float(os.getenv("AGENTIC_REWARD_TARGET_PIPS", "1.20"))
+    agentic_state_path: str = os.getenv("AGENTIC_STATE_PATH", "models/agentic_state.json")
+
     data_dir: str = os.getenv("DATA_DIR", "data")
     model_dir: str = os.getenv("MODEL_DIR", "models")
     events_csv: str = os.getenv("EVENTS_CSV", "data/events.csv")
@@ -72,6 +92,7 @@ class Settings:
 
     live_calendar_refresh_seconds: int = int(os.getenv("LIVE_CALENDAR_REFRESH_SECONDS", "120"))
     live_loop_sleep_seconds: int = int(os.getenv("LIVE_LOOP_SLEEP_SECONDS", "1"))
+    eventless_eval_seconds: int = int(os.getenv("EVENTLESS_EVAL_SECONDS", "20"))
     live_activity_csv: str = os.getenv("LIVE_ACTIVITY_CSV", "data/live_activity.csv")
 
     @property

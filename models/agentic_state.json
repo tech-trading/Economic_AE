@@ -1,0 +1,10 @@
+{
+  "weights": {
+    "ema_rsi": 1.0,
+    "donchian": 1.0
+  },
+  "counts": {
+    "ema_rsi": 16,
+    "donchian": 0
+  }
+}

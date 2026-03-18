@@ -762,3 +762,5 @@ time_utc,mode,strategy,symbol,action,event_id,detail,policy
 2026-03-18T13:40:22.441851+00:00,LIVE,agentic_hybrid,EURUSD,skip_max_open_positions,eventless_1773841222,open_positions=1,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-03-18T13:40:42.466033+00:00,LIVE,agentic_hybrid,EURUSD,skip_max_open_positions,eventless_1773841242,open_positions=1,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-03-18T13:41:02.494875+00:00,LIVE,agentic_hybrid,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T13:41:42.322357+00:00,LIVE,agentic_hybrid,EURUSD,calendar_refresh,,events=2506,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-18T13:41:43.353976+00:00,LIVE,agentic_hybrid,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"

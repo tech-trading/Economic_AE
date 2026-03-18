@@ -84,28 +84,22 @@ pip install tensorflow==2.16.1
 
 This project defaults to `.venv311` to keep deep learning dependencies stable.
 
-2. Copy env file:
+2. Fill credentials and API keys in `.env`.
 
-```powershell
-copy .env.example .env
-```
-
-3. Fill credentials and API keys in `.env`.
-
-4. Run diagnostics (checks .env, MT5 connection, and base files):
+3. Run diagnostics (checks .env, MT5 connection, and base files):
 
 ```powershell
 python -m src.bootstrap
 ```
 
-5. Train models:
+4. Train models:
 
 ```powershell
 python -m src.data_collection
 python -m src.train
 ```
 
-6. Evaluate models:
+5. Evaluate models:
 
 ```powershell
 python -m src.evaluate

@@ -77,6 +77,89 @@ def load_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def load_live_mt5_trades(symbol: str, history_days: int) -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
+    executor = MT5Executor()
+    try:
+        executor.initialize()
+        open_positions = executor.get_open_positions(symbol)
+        recent_deals = executor.get_recent_deals(symbol, days=history_days)
+        return open_positions, recent_deals, None
+    except Exception as ex:
+        return pd.DataFrame(), pd.DataFrame(), str(ex)
+    finally:
+        try:
+            executor.shutdown()
+        except Exception:
+            pass
+
+
+def build_monitor_source(environment: str, history_days: int) -> tuple[pd.DataFrame, str | None, str]:
+    env_upper = str(environment).strip().upper()
+    if env_upper == "LIVE":
+        open_live, deals_live, live_error = load_live_mt5_trades(settings.symbol, history_days)
+        if live_error:
+            return pd.DataFrame(), live_error, "MT5 LIVE"
+
+        frames: list[pd.DataFrame] = []
+
+        if not deals_live.empty:
+            deals = deals_live.copy()
+            deals["time_utc"] = pd.to_datetime(deals.get("time_utc"), utc=True, errors="coerce")
+            deals["side"] = deals.get("side", "").astype(str).str.upper()
+            deals = deals[deals["side"].isin(["BUY", "SELL"])].copy()
+            if "entry_label" not in deals.columns:
+                deals["entry_label"] = "LIVE_DEAL"
+            if "confidence" not in deals.columns:
+                deals["confidence"] = 0.5
+            if "proba_buy" not in deals.columns:
+                deals["proba_buy"] = np.where(deals["side"] == "BUY", 1.0, 0.0)
+            if "event_name" not in deals.columns:
+                deals["event_name"] = deals.get("entry_label", "LIVE_DEAL").astype(str)
+            if "event_currency" not in deals.columns:
+                deals["event_currency"] = str(settings.symbol)[:3]
+            if "event_importance" not in deals.columns:
+                deals["event_importance"] = np.nan
+            frames.append(deals)
+
+        if not open_live.empty:
+            opens = open_live.copy()
+            opens["time_utc"] = pd.to_datetime(opens.get("time_utc"), utc=True, errors="coerce")
+            opens["side"] = opens.get("side", "").astype(str).str.upper()
+            opens = opens[opens["side"].isin(["BUY", "SELL"])].copy()
+            opens["entry_label"] = "OPEN_POSITION"
+            opens["confidence"] = 0.5
+            opens["proba_buy"] = np.where(opens["side"] == "BUY", 1.0, 0.0)
+            opens["event_name"] = "LIVE_OPEN_POSITION"
+            opens["event_currency"] = str(settings.symbol)[:3]
+            opens["event_importance"] = np.nan
+            frames.append(opens)
+
+        if not frames:
+            return pd.DataFrame(), None, "MT5 LIVE"
+
+        merged = pd.concat(frames, ignore_index=True)
+        cols = [
+            c
+            for c in [
+                "time_utc",
+                "side",
+                "confidence",
+                "proba_buy",
+                "event_name",
+                "entry_label",
+                "event_currency",
+                "event_importance",
+                "symbol",
+                "comment",
+            ]
+            if c in merged.columns
+        ]
+        return merged[cols], None, "MT5 LIVE"
+
+    paper_path = PROJECT_ROOT / "data/paper_trades.csv"
+    return load_csv(paper_path), None, "data/paper_trades.csv"
+
+
 def parse_int(value: str | None, default: int) -> int:
     try:
         if value is None:
@@ -319,7 +402,7 @@ def render_walkforward_charts(report_path: Path) -> None:
 
 
 def render_paper_trade_charts(
-    paper_path: Path,
+    paper_source: Path | pd.DataFrame,
     widget_prefix: str,
     min_signals_sem: int,
     min_edge_sem: float,
@@ -327,7 +410,10 @@ def render_paper_trade_charts(
     utc_offset_hours: float,
     ny_latam_preset_default: bool,
 ) -> None:
-    paper = load_csv(paper_path)
+    if isinstance(paper_source, pd.DataFrame):
+        paper = paper_source.copy()
+    else:
+        paper = load_csv(paper_source)
     if paper.empty:
         st.info("No hay registros de ejecución para graficar.")
         return
@@ -860,6 +946,49 @@ def render_live_status_panel(
 def render_trade_history_tab() -> None:
     st.subheader("Histórico de operaciones")
 
+    st.markdown("### LIVE MT5 (real)")
+    history_days = st.slider(
+        "Ventana de historial LIVE (días)",
+        min_value=1,
+        max_value=30,
+        value=7,
+        step=1,
+        key="live_history_days",
+    )
+    open_live, deals_live, live_error = load_live_mt5_trades(settings.symbol, history_days)
+
+    if live_error:
+        st.warning(f"No se pudo leer LIVE MT5: {live_error}")
+    else:
+        l1, l2 = st.columns(2)
+        l1.metric("Posiciones abiertas LIVE", int(len(open_live)))
+        l2.metric("Deals LIVE recientes", int(len(deals_live)))
+
+        st.markdown("#### Posiciones abiertas (LIVE)")
+        if open_live.empty:
+            st.info("No hay posiciones abiertas en MT5 para el símbolo actual.")
+        else:
+            open_cols = [
+                c
+                for c in ["time_utc", "ticket", "symbol", "side", "volume", "price_open", "sl", "tp", "profit", "comment"]
+                if c in open_live.columns
+            ]
+            st.dataframe(open_live[open_cols].sort_values("time_utc", ascending=False), use_container_width=True)
+
+        st.markdown("#### Deals recientes (LIVE)")
+        if deals_live.empty:
+            st.info("No hay deals LIVE en la ventana seleccionada.")
+        else:
+            deal_cols = [
+                c
+                for c in ["time_utc", "ticket", "position_id", "symbol", "entry_label", "side", "volume", "price", "profit", "commission", "swap", "comment"]
+                if c in deals_live.columns
+            ]
+            st.dataframe(deals_live[deal_cols], use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("### PAPER / Simulado")
+
     paper_path = PROJECT_ROOT / "data/paper_trades.csv"
     trades = load_csv(paper_path)
     if trades.empty:
@@ -1195,9 +1324,45 @@ def main() -> None:
         render_walkforward_charts(PROJECT_ROOT / "models/walkforward_monthly_report.csv")
 
         st.subheader("Monitoreo de ejecución")
-        st.caption("Vista analítica sobre los registros disponibles en data/paper_trades.csv")
+        monitor_env = st.toggle(
+            "Usar ambiente LIVE real (MT5)",
+            value=False,
+            key="overview_monitor_live_toggle",
+            help="Desactivado: usa PAPER (data/paper_trades.csv). Activado: usa deals y posiciones de MT5.",
+        )
+        monitor_days = st.slider(
+            "Ventana LIVE (días)",
+            min_value=1,
+            max_value=30,
+            value=7,
+            step=1,
+            key="overview_monitor_live_days",
+            disabled=not monitor_env,
+        )
+        monitor_df, monitor_error, monitor_label = build_monitor_source(
+            environment="LIVE" if monitor_env else "PAPER",
+            history_days=int(monitor_days),
+        )
+        if monitor_env and not monitor_df.empty and "entry_label" in monitor_df.columns:
+            live_scope = st.selectbox(
+                "Filtro LIVE",
+                options=["Todas", "Solo aperturas", "Solo cierres"],
+                index=0,
+                key="overview_monitor_live_scope",
+            )
+            entry = monitor_df["entry_label"].astype(str).str.upper()
+            open_mask = entry.isin(["OPEN", "OPEN_POSITION", "REVERSE"])
+            close_mask = entry.isin(["CLOSE", "CLOSE_BY", "REVERSE"])
+            if live_scope == "Solo aperturas":
+                monitor_df = monitor_df[open_mask].copy()
+            elif live_scope == "Solo cierres":
+                monitor_df = monitor_df[close_mask].copy()
+
+        st.caption(f"Vista analítica sobre los registros disponibles en {monitor_label}")
+        if monitor_error:
+            st.warning(f"No se pudo cargar fuente LIVE: {monitor_error}")
         render_paper_trade_charts(
-            PROJECT_ROOT / "data/paper_trades.csv",
+            monitor_df,
             widget_prefix="overview",
             min_signals_sem=sem_min_signals,
             min_edge_sem=sem_min_edge,

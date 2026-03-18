@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import MetaTrader5 as mt5
+import numpy as np
 import pandas as pd
 
 from src.config import settings
@@ -137,3 +138,44 @@ class MT5Executor:
         if positions is None:
             return 0
         return int(len(positions))
+
+    def get_open_positions(self, symbol: str) -> pd.DataFrame:
+        positions = mt5.positions_get(symbol=symbol)
+        if positions is None or len(positions) == 0:
+            return pd.DataFrame()
+
+        df = pd.DataFrame([p._asdict() for p in positions])
+        if "time" in df.columns:
+            df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True, errors="coerce")
+        if "type" in df.columns:
+            df["side"] = np.where(df["type"] == mt5.POSITION_TYPE_BUY, "BUY", "SELL")
+        return df
+
+    def get_recent_deals(self, symbol: str, days: int = 7) -> pd.DataFrame:
+        utc_to = datetime.now(timezone.utc)
+        utc_from = utc_to - pd.Timedelta(days=max(1, int(days)))
+
+        deals = mt5.history_deals_get(utc_from, utc_to)
+        if deals is None or len(deals) == 0:
+            return pd.DataFrame()
+
+        df = pd.DataFrame([d._asdict() for d in deals])
+        if "symbol" in df.columns:
+            df = df[df["symbol"].astype(str) == str(symbol)].copy()
+        if df.empty:
+            return df
+
+        if "time" in df.columns:
+            df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True, errors="coerce")
+        if "type" in df.columns:
+            df["side"] = np.where(df["type"] == mt5.DEAL_TYPE_BUY, "BUY", "SELL")
+        if "entry" in df.columns:
+            entry_map = {
+                int(mt5.DEAL_ENTRY_IN): "OPEN",
+                int(mt5.DEAL_ENTRY_OUT): "CLOSE",
+                int(mt5.DEAL_ENTRY_INOUT): "REVERSE",
+                int(mt5.DEAL_ENTRY_OUT_BY): "CLOSE_BY",
+            }
+            df["entry_label"] = df["entry"].map(entry_map).fillna("OTHER")
+
+        return df.sort_values("time_utc", ascending=False) if "time_utc" in df.columns else df

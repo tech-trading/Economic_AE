@@ -275,6 +275,23 @@ class EmaRsiTrendStrategy(Strategy):
         return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
 
 
+class EmaRsiTrendInverseStrategy(EmaRsiTrendStrategy):
+    requires_models: bool = False
+    requires_event: bool = False
+
+    @staticmethod
+    def _invert(decision: TradeDecision | None) -> TradeDecision | None:
+        if decision is None:
+            return None
+        inv_side = "SELL" if str(decision.side).upper() == "BUY" else "BUY"
+        inv_proba_buy = float(np.clip(1.0 - float(decision.proba_buy), 0.01, 0.99))
+        return TradeDecision(side=inv_side, confidence=float(decision.confidence), proba_buy=inv_proba_buy)
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        base = super().decide(event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+        return self._invert(base)
+
+
 class AgenticHybridStrategy(Strategy):
     requires_models: bool = False
     requires_event: bool = False
@@ -443,6 +460,23 @@ class AgenticHybridStrategy(Strategy):
             }
         )
         return decision
+
+
+class AgenticHybridInverseStrategy(AgenticHybridStrategy):
+    requires_models: bool = False
+    requires_event: bool = False
+
+    @staticmethod
+    def _invert(decision: TradeDecision | None) -> TradeDecision | None:
+        if decision is None:
+            return None
+        inv_side = "SELL" if str(decision.side).upper() == "BUY" else "BUY"
+        inv_proba_buy = float(np.clip(1.0 - float(decision.proba_buy), 0.01, 0.99))
+        return TradeDecision(side=inv_side, confidence=float(decision.confidence), proba_buy=inv_proba_buy)
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        base = super().decide(event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+        return self._invert(base)
 
 
 class DonchianBreakoutStrategy(Strategy):
@@ -621,7 +655,22 @@ def get_strategy(name: str, settings, policy: dict) -> Strategy:
             vol_period=int(settings.ema_vol_period),
             min_vol_pips=float(settings.ema_min_vol_pips),
         )
+    if name in {"ema_rsi_trend_inv", "ema_rsi_inv", "ema_rsi_inverse", "ema_rsi_trend_inverse"}:
+        return EmaRsiTrendInverseStrategy(
+            fast_span=int(settings.ema_fast_span),
+            slow_span=int(settings.ema_slow_span),
+            rsi_period=int(settings.ema_rsi_period),
+            rsi_buy_level=float(settings.ema_rsi_buy_level),
+            rsi_sell_level=float(settings.ema_rsi_sell_level),
+            min_separation_pips=float(settings.ema_min_separation_pips),
+            momentum_lookback_ticks=int(settings.ema_momentum_lookback_ticks),
+            min_momentum_pips=float(settings.ema_min_momentum_pips),
+            vol_period=int(settings.ema_vol_period),
+            min_vol_pips=float(settings.ema_min_vol_pips),
+        )
     if name in {"agentic", "agentic_hybrid", "agentic_ai", "multi_agent"}:
         return AgenticHybridStrategy(settings=settings, policy=policy)
+    if name in {"agentic_hybrid_inv", "agentic_inv", "agentic_ai_inv", "multi_agent_inv"}:
+        return AgenticHybridInverseStrategy(settings=settings, policy=policy)
     # default fallback
     return DefaultStrategy()

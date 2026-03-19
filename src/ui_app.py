@@ -227,7 +227,7 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
-    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "ema_rsi_trend_inv", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "agentic_hybrid_inv", "agentic_inv", "agentic_ai_inv", "multi_agent_inv"}:
         return {"status": "eventless_strategy", "path": str(events_csv_path)}
 
     if not events_csv_path.exists():
@@ -1285,7 +1285,7 @@ def main() -> None:
                     "DONCHIAN_SESSIONS": "london,ny",
                 }
             )
-        elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi"}:
+        elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "ema_rsi_trend_inv"}:
             st.json(
                 {
                     "EMA_FAST_SPAN": parse_int(env_vals.get("EMA_FAST_SPAN"), 21),
@@ -1301,7 +1301,7 @@ def main() -> None:
                     "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
                 }
             )
-        elif strategy_mode in {"agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+        elif strategy_mode in {"agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "agentic_hybrid_inv", "agentic_inv", "agentic_ai_inv", "multi_agent_inv"}:
             st.json(
                 {
                     "AGENTIC_MODE": "multi-agent orchestration (EMA+RSI + Donchian)",
@@ -1388,8 +1388,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "ema_rsi_trend_inv", "agentic_hybrid", "agentic_hybrid_inv"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "ema_rsi_trend_inv", "agentic_hybrid", "agentic_hybrid_inv"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "ema_rsi_trend_inv", "agentic_hybrid", "agentic_hybrid_inv"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 

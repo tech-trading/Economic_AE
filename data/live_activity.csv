@@ -2278,3 +2278,4 @@ time_utc,mode,strategy,symbol,action,event_id,detail,policy
 2026-03-19T00:59:46.089594+00:00,LIVE,ema_rsi_trend,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-03-19T01:00:06.133458+00:00,LIVE,ema_rsi_trend,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-03-19T01:00:26.288246+00:00,LIVE,ema_rsi_trend,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-03-19T01:00:46.930824+00:00,LIVE,ema_rsi_trend,EURUSD,order_sent_eventless,eventless_1773882046,"side=BUY,confidence=0.7836","{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"

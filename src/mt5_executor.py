@@ -100,7 +100,16 @@ class MT5Executor:
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             raise RuntimeError(f"Order failed: retcode={result.retcode}, comment={result.comment}")
 
-        return result._asdict()
+        res = result._asdict()
+        try:
+            # Apply trailing stop immediately after opening the order so
+            # the new position gets the trailing SL without waiting for
+            # the next loop iteration.
+            self.apply_trailing_stop(symbol)
+        except Exception as ex:
+            print(f"apply_trailing_stop after open failed: {ex}")
+
+        return res
 
     def apply_trailing_stop(self, symbol: str) -> None:
         positions = mt5.positions_get(symbol=symbol)

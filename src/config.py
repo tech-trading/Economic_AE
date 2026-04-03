@@ -67,6 +67,7 @@ class Settings:
     ema_min_vol_pips: float = float(os.getenv("EMA_MIN_VOL_PIPS", "0.05"))
 
     # Agentic strategy (multi-agent orchestration)
+    agent_manage_all_strategies: bool = os.getenv("AGENT_MANAGE_ALL_STRATEGIES", "true").strip().lower() in {"1", "true", "yes", "y"}
     agentic_learning_rate: float = float(os.getenv("AGENTIC_LEARNING_RATE", "0.20"))
     agentic_explore_prob: float = float(os.getenv("AGENTIC_EXPLORE_PROB", "0.10"))
     agentic_min_confidence: float = float(os.getenv("AGENTIC_MIN_CONFIDENCE", "0.56"))

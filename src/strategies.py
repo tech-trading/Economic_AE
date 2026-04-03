@@ -19,6 +19,38 @@ class Strategy:
         raise NotImplementedError()
 
 
+class AgentManagedStrategy(Strategy):
+    """Adapter that runs any strategy behind a unified agent interface."""
+
+    def __init__(self, agent_name: str, strategy: Strategy):
+        self.agent_name = str(agent_name or "unknown")
+        self.strategy = strategy
+        self.requires_models = bool(getattr(strategy, "requires_models", True))
+        self.requires_event = bool(getattr(strategy, "requires_event", True))
+        self.calls = 0
+        self.decisions = 0
+        self.last_decision_side: str | None = None
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        self.calls += 1
+        decision = self.strategy.decide(event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+        if decision is not None:
+            self.decisions += 1
+            self.last_decision_side = str(getattr(decision, "side", ""))
+        return decision
+
+    def get_agent_status(self) -> dict[str, Any]:
+        return {
+            "agent_name": self.agent_name,
+            "strategy_class": self.strategy.__class__.__name__,
+            "calls": int(self.calls),
+            "decisions": int(self.decisions),
+            "last_decision_side": self.last_decision_side,
+            "requires_models": bool(self.requires_models),
+            "requires_event": bool(self.requires_event),
+        }
+
+
 class DefaultStrategy(Strategy):
     def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
         if bundle.X_tabular.empty:
@@ -582,7 +614,7 @@ class DonchianBreakoutStrategy(Strategy):
         return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
 
 
-def get_strategy(name: str, settings, policy: dict) -> Strategy:
+def _build_strategy(name: str, settings, policy: dict) -> Strategy:
     name = (name or "").strip().lower()
     if name == "zscore" or name == "z_score" or name == "z-score":
         return ZScoreStrategy(lookback_seconds=int(settings.z_score_lookback_seconds), z_threshold=float(settings.z_score_threshold), z_weight=float(settings.z_weight), mode=settings.z_combination_mode)
@@ -625,3 +657,34 @@ def get_strategy(name: str, settings, policy: dict) -> Strategy:
         return AgenticHybridStrategy(settings=settings, policy=policy)
     # default fallback
     return DefaultStrategy()
+
+
+def is_agent_managed(strategy: Strategy) -> bool:
+    return isinstance(strategy, AgentManagedStrategy)
+
+
+def list_supported_strategies() -> list[str]:
+    return [
+        "default",
+        "zscore",
+        "momentum",
+        "donchian",
+        "donchian_nylondon",
+        "ema_rsi",
+        "agentic_hybrid",
+    ]
+
+
+def get_strategy(name: str, settings, policy: dict) -> Strategy:
+    raw_name = (name or "").strip().lower()
+    base = _build_strategy(raw_name, settings, policy)
+
+    manage_all = bool(getattr(settings, "agent_manage_all_strategies", True))
+    if not manage_all:
+        return base
+
+    if isinstance(base, AgentManagedStrategy):
+        return base
+
+    agent_name = raw_name if raw_name else "default"
+    return AgentManagedStrategy(agent_name=agent_name, strategy=base)

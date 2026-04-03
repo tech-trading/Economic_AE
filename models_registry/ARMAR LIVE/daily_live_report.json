@@ -1,0 +1,23 @@
+{
+  "generated_at_utc": "2026-04-03T14:43:09.134288+00:00",
+  "window_hours": 24,
+  "since_utc": "2026-04-02T14:43:09.134288+00:00",
+  "activity": {
+    "rows": 32,
+    "actions": {
+      "order_sent_eventless": 15,
+      "calendar_refresh": 9,
+      "eventless_no_decision": 8
+    }
+  },
+  "agents": {
+    "rows_with_agent": 0,
+    "by_agent": {}
+  },
+  "paper": {
+    "signals": 0,
+    "buy_signals": 0,
+    "sell_signals": 0,
+    "avg_confidence": 0.0
+  }
+}

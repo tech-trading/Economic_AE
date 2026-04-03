@@ -1,13 +1,18 @@
 {
-  "generated_at_utc": "2026-03-17T01:38:57.351809+00:00",
+  "generated_at_utc": "2026-04-03T14:43:09.134288+00:00",
   "window_hours": 24,
-  "since_utc": "2026-03-16T01:38:57.351809+00:00",
+  "since_utc": "2026-04-02T14:43:09.134288+00:00",
   "activity": {
-    "rows": 12,
+    "rows": 32,
     "actions": {
-      "calendar_refresh": 6,
-      "no_upcoming_events": 6
+      "order_sent_eventless": 15,
+      "calendar_refresh": 9,
+      "eventless_no_decision": 8
     }
+  },
+  "agents": {
+    "rows_with_agent": 0,
+    "by_agent": {}
   },
   "paper": {
     "signals": 0,

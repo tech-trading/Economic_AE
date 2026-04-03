@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 import json
 import os
+from collections import deque
 from types import SimpleNamespace
 
 import numpy as np
@@ -30,6 +31,9 @@ class LiveTrader:
 
         # strategy selection
         self.strategy = get_strategy(settings.strategy, settings, self.policy)
+        self._recent_order_times: deque[datetime] = deque()
+        self._last_order_side: str | None = None
+        self._last_order_utc: datetime | None = None
 
         if self.strategy.requires_models and not self.tabular_models and self.lstm_model is None:
             raise RuntimeError("No models loaded. Train first.")
@@ -78,8 +82,11 @@ class LiveTrader:
                                 open_positions = self.executor.count_open_positions(settings.symbol)
                                 if open_positions >= settings.max_open_positions:
                                     self._log_activity(action="skip_max_open_positions", event_id=eventless_id, detail=f"open_positions={open_positions}")
+                                elif not self._can_send_order(now, str(decision.side), eventless_id):
+                                    pass
                                 else:
                                     self.executor.send_market_order(settings.symbol, decision)
+                                    self._on_order_sent(now, str(decision.side))
                                     self._log_activity(action="order_sent_eventless", event_id=eventless_id, detail=f"side={decision.side},confidence={decision.confidence:.4f}")
                                     print(f"Sending eventless order: {decision}")
                         else:
@@ -128,9 +135,13 @@ class LiveTrader:
                                 already_traded_event_ids.add(event_id)
                                 time.sleep(max(1, settings.live_loop_sleep_seconds))
                                 continue
+                            if not self._can_send_order(now, str(decision.side), event_id):
+                                time.sleep(max(1, settings.live_loop_sleep_seconds))
+                                continue
 
                             print(f"Sending order for event {event_id}: {decision}")
                             self.executor.send_market_order(settings.symbol, decision)
+                            self._on_order_sent(now, str(decision.side))
                             self._log_activity(action="order_sent", event_id=event_id, detail=f"side={decision.side},confidence={decision.confidence:.4f}")
 
                         already_traded_event_ids.add(event_id)
@@ -158,6 +169,10 @@ class LiveTrader:
     def _log_activity(self, action: str, event_id: str | None = None, detail: str = "") -> None:
         os.makedirs(settings.data_dir, exist_ok=True)
         path = settings.live_activity_csv
+        agent_detail = self._agent_status_detail()
+        full_detail = detail
+        if agent_detail:
+            full_detail = f"{detail} | {agent_detail}" if detail else agent_detail
         row = {
             "time_utc": datetime.now(timezone.utc).isoformat(),
             "mode": "PAPER" if settings.paper_trading else "LIVE",
@@ -165,7 +180,7 @@ class LiveTrader:
             "symbol": settings.symbol,
             "action": action,
             "event_id": event_id or "",
-            "detail": detail,
+            "detail": full_detail,
             "policy": json.dumps(self.policy, ensure_ascii=True),
         }
         df = pd.DataFrame([row])
@@ -173,6 +188,26 @@ class LiveTrader:
             df.to_csv(path, mode="a", header=False, index=False)
         else:
             df.to_csv(path, index=False)
+
+    def _agent_status_detail(self) -> str:
+        getter = getattr(self.strategy, "get_agent_status", None)
+        if not callable(getter):
+            return ""
+
+        try:
+            st = getter() or {}
+        except Exception:
+            return ""
+
+        agent_name = str(st.get("agent_name", ""))
+        strategy_class = str(st.get("strategy_class", ""))
+        calls = int(st.get("calls", 0))
+        decisions = int(st.get("decisions", 0))
+        last_side = st.get("last_decision_side")
+        return (
+            f"agent={agent_name};strategy_class={strategy_class};"
+            f"calls={calls};decisions={decisions};last_side={last_side}"
+        )
 
     def _build_decision(self, event_row: pd.Series) -> TradeDecision | None:
         ticks = self.executor.get_recent_ticks(settings.symbol, seconds=settings.lookback_seconds + 120)
@@ -188,6 +223,43 @@ class LiveTrader:
             bundle = SimpleNamespace(X_tabular=pd.DataFrame(), X_seq=np.zeros((1, 1, 1), dtype=np.float32))
         # delegate to selected strategy
         return self.strategy.decide(event_row, ticks, bundle, self.tabular_models, self.lstm_model, self.feature_columns, self.policy, settings)
+
+    def _prune_recent_orders(self, now: datetime) -> None:
+        while self._recent_order_times and (now - self._recent_order_times[0]).total_seconds() > 3600:
+            self._recent_order_times.popleft()
+
+    def _can_send_order(self, now: datetime, side: str, event_id: str) -> bool:
+        self._prune_recent_orders(now)
+
+        min_gap = max(0, int(getattr(settings, "min_seconds_between_trades", 0)))
+        if self._last_order_utc is not None and min_gap > 0:
+            elapsed = float((now - self._last_order_utc).total_seconds())
+            if elapsed < min_gap:
+                self._log_activity(action="skip_trade_cooldown", event_id=event_id, detail=f"elapsed={elapsed:.1f},min_gap={min_gap}")
+                return False
+
+        max_hour = max(0, int(getattr(settings, "max_trades_per_hour", 0)))
+        if max_hour > 0 and len(self._recent_order_times) >= max_hour:
+            self._log_activity(action="skip_trade_rate_limit", event_id=event_id, detail=f"trades_last_hour={len(self._recent_order_times)},max={max_hour}")
+            return False
+
+        same_side_gap = max(0, int(getattr(settings, "same_side_cooldown_seconds", 0)))
+        if (
+            same_side_gap > 0
+            and self._last_order_side == str(side).upper()
+            and self._last_order_utc is not None
+        ):
+            elapsed_side = float((now - self._last_order_utc).total_seconds())
+            if elapsed_side < same_side_gap:
+                self._log_activity(action="skip_same_side_cooldown", event_id=event_id, detail=f"side={side},elapsed={elapsed_side:.1f},cooldown={same_side_gap}")
+                return False
+
+        return True
+
+    def _on_order_sent(self, now: datetime, side: str) -> None:
+        self._recent_order_times.append(now)
+        self._last_order_utc = now
+        self._last_order_side = str(side).upper()
 
     def _record_paper_trade(self, event_id: str, event_row: pd.Series, decision: TradeDecision) -> None:
         os.makedirs(settings.data_dir, exist_ok=True)

@@ -118,6 +118,25 @@ Salida
   - Calcula `channel_pos = (latest - low) / channel_width` y define `buy_zone`/`sell_zone` según `trigger_quantile`; si no hay confirmación de bloque, usa zona como alternativa.
   - Si ambas o ninguna condiciones de ruptura se cumplen → no operar.
   - Calcula `ema_fast` (span=20) y `ema_slow` (span=50) para modular `trend_factor` (si ruptura contraria a EMA, reduce un poco la confianza).
+
+**TurtleAtrBreakoutStrategy**:
+- Requisitos: `requires_models=False`, `requires_event=False`.
+- Inspiración: enfoque Turtle/trend-following (ruptura de rango) con filtro de volatilidad ATR y filtro de tendencia para reducir rupturas falsas.
+- Parámetros clave:
+  - `lookback_seconds`: ventana para el canal de ruptura.
+  - `breakout_buffer_pips`: buffer extra para confirmar ruptura por encima/debajo del canal.
+  - `min_channel_pips`: evita operar en canales demasiado estrechos.
+  - `confirm_ticks`: cantidad de ticks consecutivos para confirmar ruptura.
+  - `atr_period_ticks`, `min_atr_pips`: filtro mínimo de volatilidad tipo ATR.
+  - `trend_ema_span`: EMA de tendencia para filtrar entradas contra tendencia.
+  - `max_extension_atr`: evita entrar si el precio ya está demasiado extendido respecto de la EMA.
+  - `signal_cooldown_seconds`: freno anti-reentrada consecutiva del mismo lado.
+- Flujo resumido:
+  - Construye canal high/low en ventana de lookback.
+  - Calcula ATR aproximado sobre cambios absolutos del mid-price y exige un mínimo.
+  - Exige ruptura con `confirm_ticks` y `breakout_buffer_pips`.
+  - Aplica filtro de tendencia (solo BUY si precio sobre EMA, SELL si debajo).
+  - Si supera umbral de política, emite `TradeDecision` con confianza/probabilidad calibradas.
   - `strength = distance / channel_width`, `edge_strength = max(strength, abs(channel_pos-0.5)*2)` y `confidence = clip((0.55 + min(0.35, edge_strength*0.45)) * trend_factor, 0.55, 0.93)`.
   - Si `confidence < policy['decision_threshold']` → no operar.
   - `proba_buy = clip(0.5 + direction * min(0.49, 0.28 + strength), 0.01, 0.99)` y retorna `TradeDecision`.

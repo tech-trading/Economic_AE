@@ -555,7 +555,7 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
-    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "turtle_atr", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
         return {"status": "eventless_strategy", "path": str(events_csv_path)}
 
     if not events_csv_path.exists():
@@ -1220,6 +1220,36 @@ def render_live_status_panel(
             f"actividad={report_obj.get('activity', {}).get('rows', 0)}"
         )
 
+        agents_obj = report_obj.get("agents", {}) if isinstance(report_obj, dict) else {}
+        by_agent = agents_obj.get("by_agent", {}) if isinstance(agents_obj, dict) else {}
+        if isinstance(by_agent, dict) and by_agent:
+            st.markdown("#### Resumen por agente (24h)")
+            rows = []
+            for agent_name, obj in by_agent.items():
+                if not isinstance(obj, dict):
+                    continue
+                rows.append(
+                    {
+                        "agent": str(agent_name),
+                        "strategy_class": str(obj.get("strategy_class", "")),
+                        "rows": int(obj.get("rows", 0)),
+                        "signal_rows": int(obj.get("signal_rows", 0)),
+                        "signal_rate": float(obj.get("signal_rate", 0.0)),
+                        "max_calls": int(obj.get("max_calls", 0)),
+                        "max_decisions": int(obj.get("max_decisions", 0)),
+                        "last_side": str(obj.get("last_side", "")),
+                        "last_seen_utc": str(obj.get("last_seen_utc", "")),
+                    }
+                )
+
+            if rows:
+                df_agents = pd.DataFrame(rows).sort_values(["signal_rows", "rows"], ascending=False)
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Agentes activos 24h", int(len(df_agents)))
+                a2.metric("Señales agente 24h", int(df_agents["signal_rows"].sum()))
+                a3.metric("Tasa señal prom.", f"{float(df_agents['signal_rate'].mean()):.2%}")
+                st.dataframe(df_agents, use_container_width=True)
+
     if activity.empty:
         st.info("No hay actividad LIVE registrada todavía.")
         return
@@ -1641,6 +1671,21 @@ def main() -> None:
                     "DONCHIAN_SESSIONS": "london,ny",
                 }
             )
+        elif strategy_mode in {"turtle_atr", "atr_breakout", "vol_breakout", "turtle_atr_breakout"}:
+            st.json(
+                {
+                    "TURTLE_LOOKBACK_SECONDS": parse_int(env_vals.get("TURTLE_LOOKBACK_SECONDS"), 1200),
+                    "TURTLE_BREAKOUT_BUFFER_PIPS": parse_float(env_vals.get("TURTLE_BREAKOUT_BUFFER_PIPS"), 0.30),
+                    "TURTLE_MIN_CHANNEL_PIPS": parse_float(env_vals.get("TURTLE_MIN_CHANNEL_PIPS"), 1.20),
+                    "TURTLE_CONFIRM_TICKS": parse_int(env_vals.get("TURTLE_CONFIRM_TICKS"), 2),
+                    "TURTLE_ATR_PERIOD_TICKS": parse_int(env_vals.get("TURTLE_ATR_PERIOD_TICKS"), 120),
+                    "TURTLE_MIN_ATR_PIPS": parse_float(env_vals.get("TURTLE_MIN_ATR_PIPS"), 0.08),
+                    "TURTLE_TREND_EMA_SPAN": parse_int(env_vals.get("TURTLE_TREND_EMA_SPAN"), 180),
+                    "TURTLE_MAX_EXTENSION_ATR": parse_float(env_vals.get("TURTLE_MAX_EXTENSION_ATR"), 2.50),
+                    "TURTLE_SIGNAL_COOLDOWN_SECONDS": parse_int(env_vals.get("TURTLE_SIGNAL_COOLDOWN_SECONDS"), 240),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
         elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi"}:
             st.json(
                 {
@@ -1748,8 +1793,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 

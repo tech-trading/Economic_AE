@@ -6,7 +6,7 @@ from datetime import timedelta, timezone
 from dotenv import load_dotenv
 
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 @dataclass(frozen=True)
@@ -26,11 +26,16 @@ class Settings:
     stop_loss_pips: float = float(os.getenv("STOP_LOSS_PIPS", "12"))
     take_profit_pips: float = float(os.getenv("TAKE_PROFIT_PIPS", "24"))
     trailing_stop_pips: float = float(os.getenv("TRAILING_STOP_PIPS", "8"))
+    min_sl_spread_multiplier: float = float(os.getenv("MIN_SL_SPREAD_MULTIPLIER", "3.0"))
+    min_tp_sl_ratio_enforced: float = float(os.getenv("MIN_TP_SL_RATIO_ENFORCED", "1.6"))
     seconds_before_event: int = int(os.getenv("SECONDS_BEFORE_EVENT", "10"))
     decision_threshold: float = float(os.getenv("DECISION_THRESHOLD", "0.60"))
     no_trade_band: float = float(os.getenv("NO_TRADE_BAND", "0.05"))
     paper_trading: bool = os.getenv("PAPER_TRADING", "true").strip().lower() in {"1", "true", "yes", "y"}
     max_open_positions: int = int(os.getenv("MAX_OPEN_POSITIONS", "1"))
+    min_seconds_between_trades: int = int(os.getenv("MIN_SECONDS_BETWEEN_TRADES", "120"))
+    max_trades_per_hour: int = int(os.getenv("MAX_TRADES_PER_HOUR", "10"))
+    same_side_cooldown_seconds: int = int(os.getenv("SAME_SIDE_COOLDOWN_SECONDS", "180"))
 
     # Strategy selection and Z-score parameters
     strategy: str = os.getenv("STRATEGY", "default")
@@ -54,6 +59,17 @@ class Settings:
     donchian_session_filter: bool = os.getenv("DONCHIAN_SESSION_FILTER", "false").strip().lower() in {"1", "true", "yes", "y"}
     donchian_sessions: str = os.getenv("DONCHIAN_SESSIONS", "london,ny")
 
+    # Turtle ATR breakout strategy (eventless-capable)
+    turtle_lookback_seconds: int = int(os.getenv("TURTLE_LOOKBACK_SECONDS", "1200"))
+    turtle_breakout_buffer_pips: float = float(os.getenv("TURTLE_BREAKOUT_BUFFER_PIPS", "0.30"))
+    turtle_min_channel_pips: float = float(os.getenv("TURTLE_MIN_CHANNEL_PIPS", "1.20"))
+    turtle_confirm_ticks: int = int(os.getenv("TURTLE_CONFIRM_TICKS", "2"))
+    turtle_atr_period_ticks: int = int(os.getenv("TURTLE_ATR_PERIOD_TICKS", "120"))
+    turtle_min_atr_pips: float = float(os.getenv("TURTLE_MIN_ATR_PIPS", "0.08"))
+    turtle_trend_ema_span: int = int(os.getenv("TURTLE_TREND_EMA_SPAN", "180"))
+    turtle_max_extension_atr: float = float(os.getenv("TURTLE_MAX_EXTENSION_ATR", "2.50"))
+    turtle_signal_cooldown_seconds: int = int(os.getenv("TURTLE_SIGNAL_COOLDOWN_SECONDS", "240"))
+
     # EMA + RSI trend strategy (eventless-capable)
     ema_fast_span: int = int(os.getenv("EMA_FAST_SPAN", "21"))
     ema_slow_span: int = int(os.getenv("EMA_SLOW_SPAN", "55"))
@@ -65,6 +81,7 @@ class Settings:
     ema_min_momentum_pips: float = float(os.getenv("EMA_MIN_MOMENTUM_PIPS", "0.25"))
     ema_vol_period: int = int(os.getenv("EMA_VOL_PERIOD", "40"))
     ema_min_vol_pips: float = float(os.getenv("EMA_MIN_VOL_PIPS", "0.05"))
+    ema_signal_cooldown_seconds: int = int(os.getenv("EMA_SIGNAL_COOLDOWN_SECONDS", "180"))
 
     # Agentic strategy (multi-agent orchestration)
     agent_manage_all_strategies: bool = os.getenv("AGENT_MANAGE_ALL_STRATEGIES", "true").strip().lower() in {"1", "true", "yes", "y"}
@@ -74,6 +91,7 @@ class Settings:
     agentic_reward_horizon_seconds: int = int(os.getenv("AGENTIC_REWARD_HORIZON_SECONDS", "45"))
     agentic_reward_target_pips: float = float(os.getenv("AGENTIC_REWARD_TARGET_PIPS", "1.20"))
     agentic_state_path: str = os.getenv("AGENTIC_STATE_PATH", "models/agentic_state.json")
+    agentic_signal_cooldown_seconds: int = int(os.getenv("AGENTIC_SIGNAL_COOLDOWN_SECONDS", "180"))
 
     data_dir: str = os.getenv("DATA_DIR", "data")
     model_dir: str = os.getenv("MODEL_DIR", "models")

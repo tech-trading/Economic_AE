@@ -225,6 +225,7 @@ class EmaRsiTrendStrategy(Strategy):
         min_momentum_pips: float = 0.25,
         vol_period: int = 40,
         min_vol_pips: float = 0.05,
+        signal_cooldown_seconds: int = 180,
     ):
         self.fast_span = max(3, int(fast_span))
         self.slow_span = max(self.fast_span + 2, int(slow_span))
@@ -236,6 +237,9 @@ class EmaRsiTrendStrategy(Strategy):
         self.min_momentum_pips = max(0.0, float(min_momentum_pips))
         self.vol_period = max(8, int(vol_period))
         self.min_vol_pips = max(0.0, float(min_vol_pips))
+        self.signal_cooldown_seconds = max(0, int(signal_cooldown_seconds))
+        self._last_signal_side: str | None = None
+        self._last_signal_ts: pd.Timestamp | None = None
 
     @staticmethod
     def _pip_size(symbol: str) -> float:
@@ -303,7 +307,159 @@ class EmaRsiTrendStrategy(Strategy):
         if confidence < float(policy.get("decision_threshold", 0.5)):
             return None
 
+        current_ts = pd.Timestamp.now(tz="UTC")
+        if "time_utc" in df.columns:
+            ts = pd.to_datetime(df["time_utc"].iloc[-1], utc=True, errors="coerce")
+            if pd.notna(ts):
+                current_ts = ts
+
+        if (
+            self.signal_cooldown_seconds > 0
+            and self._last_signal_side == side
+            and self._last_signal_ts is not None
+        ):
+            elapsed = float((current_ts - self._last_signal_ts).total_seconds())
+            if elapsed < float(self.signal_cooldown_seconds):
+                return None
+
         proba_buy = float(np.clip(0.5 + direction * min(0.45, 0.20 + 0.30 * confidence), 0.01, 0.99))
+        self._last_signal_side = side
+        self._last_signal_ts = current_ts
+        return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
+
+
+class TurtleAtrBreakoutStrategy(Strategy):
+    requires_models: bool = False
+    requires_event: bool = False
+
+    def __init__(
+        self,
+        lookback_seconds: int = 1200,
+        breakout_buffer_pips: float = 0.30,
+        min_channel_pips: float = 1.20,
+        confirm_ticks: int = 2,
+        atr_period_ticks: int = 120,
+        min_atr_pips: float = 0.08,
+        trend_ema_span: int = 180,
+        max_extension_atr: float = 2.50,
+        signal_cooldown_seconds: int = 240,
+    ):
+        self.lookback_seconds = max(120, int(lookback_seconds))
+        self.breakout_buffer_pips = max(0.0, float(breakout_buffer_pips))
+        self.min_channel_pips = max(0.1, float(min_channel_pips))
+        self.confirm_ticks = max(1, int(confirm_ticks))
+        self.atr_period_ticks = max(20, int(atr_period_ticks))
+        self.min_atr_pips = max(0.0, float(min_atr_pips))
+        self.trend_ema_span = max(20, int(trend_ema_span))
+        self.max_extension_atr = max(0.5, float(max_extension_atr))
+        self.signal_cooldown_seconds = max(0, int(signal_cooldown_seconds))
+        self._last_signal_side: str | None = None
+        self._last_signal_ts: pd.Timestamp | None = None
+
+    @staticmethod
+    def _pip_size(symbol: str) -> float:
+        sym = str(symbol or "").upper()
+        return 0.01 if "JPY" in sym else 0.0001
+
+    def _window(self, ticks: pd.DataFrame) -> pd.DataFrame:
+        if ticks is None or ticks.empty:
+            return pd.DataFrame()
+
+        df = ticks
+        if "time_utc" in df.columns:
+            times = df["time_utc"]
+            if not times.is_monotonic_increasing:
+                df = df.sort_values("time_utc")
+                times = df["time_utc"]
+
+            utc_to = times.iat[-1]
+            start_time = utc_to - pd.Timedelta(seconds=self.lookback_seconds)
+            start_idx = int(times.searchsorted(start_time, side="left"))
+            out = df.iloc[start_idx:]
+            if out.empty:
+                return df.tail(max(300, self.atr_period_ticks + self.confirm_ticks + 20))
+            return out
+
+        return df.tail(max(300, self.atr_period_ticks + self.confirm_ticks + 20))
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        window = self._window(ticks)
+        min_rows = max(self.atr_period_ticks + 5, self.confirm_ticks + 5, self.trend_ema_span + 5)
+        if window.empty or len(window) < min_rows:
+            return None
+
+        mid = ((window["bid"].astype(float) + window["ask"].astype(float)) / 2.0).dropna()
+        if len(mid) < min_rows:
+            return None
+
+        pip = self._pip_size(getattr(settings, "symbol", "EURUSD"))
+
+        pivot = mid.iloc[:-self.confirm_ticks] if len(mid) > self.confirm_ticks else mid
+        if pivot.empty:
+            return None
+        high = float(pivot.max())
+        low = float(pivot.min())
+        latest_block = mid.tail(self.confirm_ticks)
+        latest = float(latest_block.iat[-1])
+
+        channel_width = max(1e-12, high - low)
+        channel_pips = float(channel_width / pip)
+        if channel_pips < self.min_channel_pips:
+            return None
+
+        tr = mid.diff().abs().fillna(0.0)
+        atr_price = float(tr.rolling(self.atr_period_ticks).mean().iloc[-1])
+        if not np.isfinite(atr_price) or atr_price <= 0:
+            return None
+        atr_pips = float(atr_price / pip)
+        if atr_pips < self.min_atr_pips:
+            return None
+
+        ema_trend = float(mid.ewm(span=self.trend_ema_span, adjust=False).mean().iat[-1])
+        extension_atr = abs(latest - ema_trend) / max(1e-12, atr_price)
+        if extension_atr > self.max_extension_atr:
+            return None
+
+        buffer = self.breakout_buffer_pips * pip
+        buy_break = bool((latest_block > (high + buffer)).all())
+        sell_break = bool((latest_block < (low - buffer)).all())
+
+        # trend filter
+        if buy_break and latest < ema_trend:
+            buy_break = False
+        if sell_break and latest > ema_trend:
+            sell_break = False
+
+        if buy_break == sell_break:
+            return None
+
+        side = "BUY" if buy_break else "SELL"
+        direction = 1.0 if buy_break else -1.0
+
+        now_ts = pd.Timestamp.now(tz="UTC")
+        if "time_utc" in window.columns:
+            ts = pd.to_datetime(window["time_utc"].iloc[-1], utc=True, errors="coerce")
+            if pd.notna(ts):
+                now_ts = ts
+
+        if (
+            self.signal_cooldown_seconds > 0
+            and self._last_signal_side == side
+            and self._last_signal_ts is not None
+        ):
+            elapsed = float((now_ts - self._last_signal_ts).total_seconds())
+            if elapsed < float(self.signal_cooldown_seconds):
+                return None
+
+        breakout_dist = max(0.0, abs(latest - (high if buy_break else low)) / max(1e-12, channel_width))
+        vol_factor = min(1.0, atr_pips / max(self.min_atr_pips + 1e-6, 2.0 * self.min_atr_pips))
+        confidence = float(np.clip(0.56 + 0.25 * min(1.0, breakout_dist) + 0.12 * vol_factor, 0.56, 0.92))
+        if confidence < float(policy.get("decision_threshold", 0.5)):
+            return None
+
+        proba_buy = float(np.clip(0.5 + direction * min(0.46, 0.22 + 0.26 * confidence), 0.01, 0.99))
+        self._last_signal_side = side
+        self._last_signal_ts = now_ts
         return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
 
 
@@ -318,14 +474,18 @@ class AgenticHybridStrategy(Strategy):
         self.min_agent_confidence = float(np.clip(getattr(settings, "agentic_min_confidence", 0.56), 0.50, 0.95))
         self.reward_horizon_seconds = max(10, int(getattr(settings, "agentic_reward_horizon_seconds", 45)))
         self.reward_target_pips = max(0.5, float(getattr(settings, "agentic_reward_target_pips", 1.2)))
+        self.signal_cooldown_seconds = max(0, int(getattr(settings, "agentic_signal_cooldown_seconds", 180)))
 
         self.state_path = Path(str(getattr(settings, "agentic_state_path", "models/agentic_state.json")))
         self.weights = {
             "ema_rsi": 1.0,
             "donchian": 1.0,
+            "turtle_atr": 1.0,
         }
-        self.agent_counts = {"ema_rsi": 0, "donchian": 0}
+        self.agent_counts = {"ema_rsi": 0, "donchian": 0, "turtle_atr": 0}
         self.pending_trades: list[dict[str, Any]] = []
+        self._last_signal_side: str | None = None
+        self._last_signal_ts: pd.Timestamp | None = None
 
         self.ema_agent = EmaRsiTrendStrategy(
             fast_span=int(settings.ema_fast_span),
@@ -347,6 +507,17 @@ class AgenticHybridStrategy(Strategy):
             trigger_quantile=float(settings.donchian_trigger_quantile),
             session_filter=False,
             sessions="london,ny",
+        )
+        self.turtle_agent = TurtleAtrBreakoutStrategy(
+            lookback_seconds=int(getattr(settings, "turtle_lookback_seconds", 1200)),
+            breakout_buffer_pips=float(getattr(settings, "turtle_breakout_buffer_pips", 0.30)),
+            min_channel_pips=float(getattr(settings, "turtle_min_channel_pips", 1.20)),
+            confirm_ticks=int(getattr(settings, "turtle_confirm_ticks", 2)),
+            atr_period_ticks=int(getattr(settings, "turtle_atr_period_ticks", 120)),
+            min_atr_pips=float(getattr(settings, "turtle_min_atr_pips", 0.08)),
+            trend_ema_span=int(getattr(settings, "turtle_trend_ema_span", 180)),
+            max_extension_atr=float(getattr(settings, "turtle_max_extension_atr", 2.50)),
+            signal_cooldown_seconds=int(getattr(settings, "turtle_signal_cooldown_seconds", 240)),
         )
 
         self._load_state()
@@ -458,6 +629,10 @@ class AgenticHybridStrategy(Strategy):
         if dec_don is not None and float(dec_don.confidence) >= self.min_agent_confidence:
             candidates.append({"agent": "donchian", "decision": dec_don})
 
+        dec_turtle = self.turtle_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+        if dec_turtle is not None and float(dec_turtle.confidence) >= self.min_agent_confidence:
+            candidates.append({"agent": "turtle_atr", "decision": dec_turtle})
+
         if not candidates:
             return None
 
@@ -465,6 +640,15 @@ class AgenticHybridStrategy(Strategy):
         decision = selected["decision"]
         if float(decision.confidence) < float(self.policy.get("decision_threshold", 0.5)):
             return None
+
+        if (
+            self.signal_cooldown_seconds > 0
+            and self._last_signal_side == str(decision.side)
+            and self._last_signal_ts is not None
+        ):
+            elapsed = float((now_ts - self._last_signal_ts).total_seconds())
+            if elapsed < float(self.signal_cooldown_seconds):
+                return None
 
         self.pending_trades.append(
             {
@@ -474,6 +658,8 @@ class AgenticHybridStrategy(Strategy):
                 "due_time": now_ts + pd.Timedelta(seconds=self.reward_horizon_seconds),
             }
         )
+        self._last_signal_side = str(decision.side)
+        self._last_signal_ts = now_ts
         return decision
 
 
@@ -630,6 +816,18 @@ def _build_strategy(name: str, settings, policy: dict) -> Strategy:
             session_filter=bool(settings.donchian_session_filter),
             sessions=str(settings.donchian_sessions),
         )
+    if name in {"turtle_atr", "atr_breakout", "vol_breakout", "turtle_atr_breakout"}:
+        return TurtleAtrBreakoutStrategy(
+            lookback_seconds=int(getattr(settings, "turtle_lookback_seconds", 1200)),
+            breakout_buffer_pips=float(getattr(settings, "turtle_breakout_buffer_pips", 0.30)),
+            min_channel_pips=float(getattr(settings, "turtle_min_channel_pips", 1.20)),
+            confirm_ticks=int(getattr(settings, "turtle_confirm_ticks", 2)),
+            atr_period_ticks=int(getattr(settings, "turtle_atr_period_ticks", 120)),
+            min_atr_pips=float(getattr(settings, "turtle_min_atr_pips", 0.08)),
+            trend_ema_span=int(getattr(settings, "turtle_trend_ema_span", 180)),
+            max_extension_atr=float(getattr(settings, "turtle_max_extension_atr", 2.50)),
+            signal_cooldown_seconds=int(getattr(settings, "turtle_signal_cooldown_seconds", 240)),
+        )
     if name in {"donchian_nylondon", "donchian_session", "donchian_ny_london"}:
         return DonchianBreakoutStrategy(
             lookback_seconds=int(settings.donchian_lookback_seconds),
@@ -652,6 +850,7 @@ def _build_strategy(name: str, settings, policy: dict) -> Strategy:
             min_momentum_pips=float(settings.ema_min_momentum_pips),
             vol_period=int(settings.ema_vol_period),
             min_vol_pips=float(settings.ema_min_vol_pips),
+            signal_cooldown_seconds=int(getattr(settings, "ema_signal_cooldown_seconds", 180)),
         )
     if name in {"agentic", "agentic_hybrid", "agentic_ai", "multi_agent"}:
         return AgenticHybridStrategy(settings=settings, policy=policy)
@@ -670,6 +869,7 @@ def list_supported_strategies() -> list[str]:
         "momentum",
         "donchian",
         "donchian_nylondon",
+        "turtle_atr",
         "ema_rsi",
         "agentic_hybrid",
     ]

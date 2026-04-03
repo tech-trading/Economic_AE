@@ -1,0 +1,9 @@
+{
+  "strategy": "donchian_nylondon",
+  "signals_total": 128,
+  "accuracy": 0.8046875,
+  "total_pnl_proxy": 0.0007807876733498887,
+  "avg_pnl_proxy": 6.099903698046005e-06,
+  "months": 1,
+  "output_csv": "models\\donchian_nylondon_monthly_validation.csv"
+}

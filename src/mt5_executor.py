@@ -69,11 +69,18 @@ class MT5Executor:
         if spread_points > settings.max_spread_points:
             raise RuntimeError(f"Spread too high: {spread_points} points")
 
+        spread_pips = float((tick.ask - tick.bid) / max(1e-12, info.point * 10.0))
+
         is_buy = decision.side.upper() == "BUY"
         price = tick.ask if is_buy else tick.bid
 
-        sl_distance = settings.stop_loss_pips * info.point * 10
-        tp_distance = settings.take_profit_pips * info.point * 10
+        sl_pips_cfg = float(settings.stop_loss_pips)
+        tp_pips_cfg = float(settings.take_profit_pips)
+        sl_pips = max(sl_pips_cfg, spread_pips * float(getattr(settings, "min_sl_spread_multiplier", 3.0)))
+        tp_pips = max(tp_pips_cfg, sl_pips * float(getattr(settings, "min_tp_sl_ratio_enforced", 1.6)))
+
+        sl_distance = sl_pips * info.point * 10
+        tp_distance = tp_pips * info.point * 10
 
         sl = price - sl_distance if is_buy else price + sl_distance
         tp = price + tp_distance if is_buy else price - tp_distance

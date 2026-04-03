@@ -24,6 +24,334 @@ ENV_PATH = PROJECT_ROOT / ".env"
 LIVE_PID_PATH = PROJECT_ROOT / "logs/live_bot.pid"
 
 
+def apply_modern_theme(theme_mode: str = "light") -> None:
+    dark = str(theme_mode).strip().lower() == "dark"
+
+    if dark:
+        bg_a = "#0e161c"
+        bg_b = "#111c24"
+        ink = "#e8f1ef"
+        muted = "#9db1ac"
+        card = "#17242d"
+        line = "#29404d"
+        shadow = "0 10px 28px rgba(0, 0, 0, 0.35)"
+        hero_bg = "linear-gradient(135deg, #18262f 0%, #1a2d38 100%)"
+        tab_bg = "#17242d"
+        tab_text = "#cfe1dd"
+        tab_active_bg = "linear-gradient(135deg, #1f3a47 0%, #3c2e2a 100%)"
+        tab_active_text = "#f5fbf9"
+        toggle_track_off = "#3b4d58"
+        toggle_track_on = "#0ea5a0"
+        toggle_knob = "#f8fbfb"
+        slider_track = "#324754"
+        slider_fill = "#0ea5a0"
+        scrollbar_track = "#1b2a34"
+        scrollbar_thumb = "#4f6774"
+        scrollbar_thumb_hover = "#6e8a98"
+        app_bg = (
+            "radial-gradient(1200px 450px at 100% -10%, rgba(19, 81, 71, 0.35) 0%, transparent 60%),"
+            "radial-gradient(900px 350px at -10% 0%, rgba(154, 52, 18, 0.22) 0%, transparent 55%),"
+            "linear-gradient(180deg, var(--bg-a) 0%, var(--bg-b) 30%)"
+        )
+    else:
+        bg_a = "#f3f7f5"
+        bg_b = "#ffffff"
+        ink = "#0f2a24"
+        muted = "#5f746f"
+        card = "#ffffff"
+        line = "#d9e6e1"
+        shadow = "0 8px 24px rgba(15, 42, 36, 0.08)"
+        hero_bg = "linear-gradient(135deg, #ffffff 0%, #f4fbf9 100%)"
+        tab_bg = "#ffffff"
+        tab_text = "#24433c"
+        tab_active_bg = "linear-gradient(135deg, #e0f6f0 0%, #fff3ee 100%)"
+        tab_active_text = "#11352f"
+        toggle_track_off = "#7f968d"
+        toggle_track_on = "#0f766e"
+        toggle_knob = "#ffffff"
+        slider_track = "#d5e3de"
+        slider_fill = "#0f766e"
+        scrollbar_track = "#e4ece9"
+        scrollbar_thumb = "#88a39a"
+        scrollbar_thumb_hover = "#5c7e73"
+        app_bg = (
+            "radial-gradient(1200px 450px at 100% -10%, #d6efe8 0%, transparent 60%),"
+            "radial-gradient(900px 350px at -10% 0%, #fde7df 0%, transparent 55%),"
+            "linear-gradient(180deg, var(--bg-a) 0%, var(--bg-b) 30%)"
+        )
+
+    st.markdown(
+        f"""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+        :root {{
+            --bg-a: {bg_a};
+            --bg-b: {bg_b};
+            --ink: {ink};
+            --muted: {muted};
+            --teal: #0f766e;
+            --teal-soft: #d8f3ef;
+            --orange: #e76f51;
+            --card: {card};
+            --line: {line};
+            --shadow: {shadow};
+            --radius: 16px;
+            --toggle-track-off: {toggle_track_off};
+            --toggle-track-on: {toggle_track_on};
+            --toggle-knob: {toggle_knob};
+            --slider-track: {slider_track};
+            --slider-fill: {slider_fill};
+            --scrollbar-track: {scrollbar_track};
+            --scrollbar-thumb: {scrollbar_thumb};
+            --scrollbar-thumb-hover: {scrollbar_thumb_hover};
+        }}
+
+        html, body, [class*="css"], p, span, label, h1, h2, h3, h4, h5 {{
+            font-family: 'Manrope', sans-serif;
+            color: var(--ink);
+        }}
+
+        .stApp {{
+            background: {app_bg};
+        }}
+
+        div.block-container {{
+            padding-top: 4.6rem;
+        }}
+
+        #theme-switch-anchor + div div[data-testid="stToggle"] {{
+            position: fixed;
+            top: 0.75rem;
+            right: 1rem;
+            width: min(320px, calc(100vw - 1.5rem));
+            z-index: 9999;
+            margin: 0;
+        }}
+
+        @media (max-width: 900px) {{
+            #theme-switch-anchor + div div[data-testid="stToggle"] {{
+                right: 0.5rem;
+                top: 0.5rem;
+                width: min(260px, calc(100vw - 1rem));
+            }}
+
+            div.block-container {{
+                padding-top: 4.9rem;
+            }}
+        }}
+
+        * {{
+            scrollbar-width: thin;
+            scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+        }}
+
+        *::-webkit-scrollbar {{
+            width: 12px;
+            height: 12px;
+        }}
+
+        *::-webkit-scrollbar-track {{
+            background: var(--scrollbar-track);
+            border-radius: 999px;
+        }}
+
+        *::-webkit-scrollbar-thumb {{
+            background: var(--scrollbar-thumb);
+            border-radius: 999px;
+            border: 2px solid var(--scrollbar-track);
+        }}
+
+        *::-webkit-scrollbar-thumb:hover {{
+            background: var(--scrollbar-thumb-hover);
+        }}
+
+        .app-hero {{
+            border: 1px solid var(--line);
+            background: {hero_bg};
+            border-radius: 20px;
+            padding: 1.1rem 1.2rem;
+            margin: 0.25rem 0 0.9rem 0;
+            box-shadow: var(--shadow);
+        }}
+
+        .app-hero h1 {{
+            color: var(--ink);
+            font-size: 1.65rem;
+            line-height: 1.15;
+            margin: 0 0 0.3rem 0;
+            letter-spacing: -0.02em;
+        }}
+
+        .app-hero p {{
+            margin: 0;
+            color: var(--muted);
+        }}
+
+        .mode-pill {{
+            display: inline-block;
+            margin-top: 0.65rem;
+            border-radius: 999px;
+            padding: 0.34rem 0.72rem;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            border: 1px solid transparent;
+        }}
+
+        .mode-pill.live {{
+            background: #d8f3ef;
+            color: #0f766e;
+            border-color: #9adbcf;
+        }}
+
+        .mode-pill.paper {{
+            background: #fde7df;
+            color: #9a3412;
+            border-color: #f4b7a6;
+        }}
+
+        div[data-testid="stMetric"] {{
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 0.55rem 0.7rem;
+            box-shadow: var(--shadow);
+        }}
+
+        div[data-testid="stMetric"] * {{
+            color: var(--ink) !important;
+        }}
+
+        div[data-testid="stTabs"] button[role="tab"] {{
+            border-radius: 12px;
+            border: 1px solid var(--line);
+            background: {tab_bg};
+            margin-right: 0.28rem;
+            color: {tab_text};
+            font-weight: 700;
+        }}
+
+        div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
+            background: {tab_active_bg};
+            border-color: var(--line);
+            color: {tab_active_text};
+        }}
+
+        div[data-testid="stToggle"] {{
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 0.35rem 0.55rem;
+            margin-bottom: 0.35rem;
+            box-shadow: var(--shadow);
+        }}
+
+        div[data-testid="stToggle"] label,
+        div[data-testid="stToggle"] p,
+        div[data-testid="stToggle"] span {{
+            color: var(--ink) !important;
+            font-weight: 700;
+        }}
+
+        div[data-testid="stToggle"] [role="switch"] {{
+            background-color: var(--toggle-track-off) !important;
+            border: 2px solid var(--line) !important;
+        }}
+
+        div[data-testid="stToggle"] [role="switch"][aria-checked="true"] {{
+            background-color: var(--toggle-track-on) !important;
+            border-color: var(--toggle-track-on) !important;
+        }}
+
+        div[data-testid="stToggle"] [role="switch"] > div {{
+            background: var(--toggle-knob) !important;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+        }}
+
+        div[data-testid="stToggle"] [data-baseweb="switch"] > div {{
+            background-color: var(--toggle-track-off) !important;
+            border: 1px solid var(--line) !important;
+        }}
+
+        div[data-testid="stToggle"] [data-baseweb="switch"] input:checked + div {{
+            background-color: var(--toggle-track-on) !important;
+            border-color: var(--toggle-track-on) !important;
+        }}
+
+        div[data-testid="stToggle"] [data-baseweb="switch"] > div > div {{
+            background: var(--toggle-knob) !important;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+        }}
+
+        div[data-testid="stSlider"] [role="slider"] {{
+            background: var(--slider-fill) !important;
+            border: 2px solid var(--toggle-knob) !important;
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--slider-fill) 30%, transparent) !important;
+        }}
+
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:first-child {{
+            background: var(--slider-track) !important;
+        }}
+
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(2) {{
+            background: var(--slider-fill) !important;
+        }}
+
+        .stButton > button {{
+            border-radius: 12px;
+            border: 1px solid #a9d3c8;
+            background: linear-gradient(135deg, #0f766e 0%, #146a63 100%);
+            color: #ffffff;
+            font-weight: 700;
+        }}
+
+        .stButton > button:hover {{
+            border-color: #7fbdae;
+            filter: brightness(1.05);
+        }}
+
+        .stCodeBlock pre, code, .stTextInput input {{
+            font-family: 'IBM Plex Mono', monospace !important;
+        }}
+
+        .section-card {{
+            border: 1px solid var(--line);
+            background: var(--card);
+            border-radius: 14px;
+            padding: 0.72rem 0.85rem;
+            margin: 0.35rem 0 0.65rem 0;
+            box-shadow: var(--shadow);
+        }}
+
+        .section-card h3 {{
+            margin: 0;
+            font-size: 1.02rem;
+            line-height: 1.25;
+            color: var(--ink);
+        }}
+
+        .section-card p {{
+            margin: 0.24rem 0 0 0;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_card(title: str, subtitle: str = "") -> None:
+    st.markdown(
+        (
+            f'<div class="section-card"><h3>{title}</h3>'
+            f"<p>{subtitle}</p></div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def load_env() -> dict[str, str]:
     if not ENV_PATH.exists():
         return {}
@@ -227,7 +555,7 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
-    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "ema_rsi_trend_inv", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "agentic_hybrid_inv", "agentic_inv", "agentic_ai_inv", "multi_agent_inv"}:
+    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
         return {"status": "eventless_strategy", "path": str(events_csv_path)}
 
     if not events_csv_path.exists():
@@ -1209,11 +1537,19 @@ def render_trade_history_tab() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Economic AE Control Center", layout="wide")
-
-    st.title("Economic AE Control Center")
-    st.caption("Panel orientado a operación real: configuración LIVE, monitoreo, entrenamiento y validación")
-
     env_vals = load_env()
+    default_dark = parse_bool(env_vals.get("UI_DARK_MODE"), False)
+    if "ui_dark_mode" not in st.session_state:
+        st.session_state["ui_dark_mode"] = default_dark
+
+    apply_modern_theme("dark" if st.session_state.get("ui_dark_mode") else "light")
+
+    st.markdown('<div id="theme-switch-anchor"></div>', unsafe_allow_html=True)
+    theme_col, _ = st.columns([2, 4])
+    with theme_col:
+        theme_label = "Tema actual: Oscuro (Luna)" if st.session_state.get("ui_dark_mode") else "Tema actual: Claro (Sol)"
+        st.toggle(theme_label, key="ui_dark_mode", help="Activa o desactiva el modo oscuro.")
+
     sem_min_signals = parse_int(env_vals.get("SEM_MIN_SIGNALS"), 8)
     sem_min_edge = parse_float(env_vals.get("SEM_MIN_EDGE"), 0.58)
     sem_min_conf = parse_float(env_vals.get("SEM_MIN_CONF"), 0.60)
@@ -1221,6 +1557,19 @@ def main() -> None:
     ny_latam_preset_default = parse_bool(env_vals.get("NY_LATAM_PRESET_DEFAULT"), False)
     paper_mode = parse_bool(env_vals.get("PAPER_TRADING"), settings.paper_trading)
     strategy_mode = (env_vals.get("STRATEGY") or getattr(settings, "strategy", "default") or "default").strip().lower()
+
+    mode_class = "paper" if paper_mode else "live"
+    mode_text = "MODO PAPER (PRUEBAS)" if paper_mode else "MODO LIVE (REAL)"
+    st.markdown(
+        f"""
+        <div class="app-hero">
+            <h1>Economic AE Control Center</h1>
+            <p>Panel de operacion, monitoreo y control de estrategias para EURUSD.</p>
+            <span class="mode-pill {mode_class}">{mode_text}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Modo de ejecución", "PAPER" if paper_mode else "LIVE")
@@ -1236,9 +1585,16 @@ def main() -> None:
     )
 
     with tab_overview:
+        events_path = Path(settings.events_csv)
+        if not events_path.is_absolute():
+            events_path = PROJECT_ROOT / events_path
+        market_path = Path(settings.market_csv)
+        if not market_path.is_absolute():
+            market_path = PROJECT_ROOT / market_path
+
         c1, c2, c3 = st.columns(3)
-        c1.metric("Events CSV", "OK" if (PROJECT_ROOT / "data/events.csv").exists() else "Missing")
-        c2.metric("Market CSV", "OK" if (PROJECT_ROOT / "data/market_ticks.csv").exists() else "Missing")
+        c1.metric("Events CSV", "OK" if events_path.exists() else "Missing")
+        c2.metric("Market CSV", "OK" if market_path.exists() else "Missing")
         c3.metric("Models", "OK" if (PROJECT_ROOT / "models/metadata.json").exists() else "Missing")
 
         st.subheader("Estrategia activa")
@@ -1285,7 +1641,7 @@ def main() -> None:
                     "DONCHIAN_SESSIONS": "london,ny",
                 }
             )
-        elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "ema_rsi_trend_inv"}:
+        elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi"}:
             st.json(
                 {
                     "EMA_FAST_SPAN": parse_int(env_vals.get("EMA_FAST_SPAN"), 21),
@@ -1301,7 +1657,7 @@ def main() -> None:
                     "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
                 }
             )
-        elif strategy_mode in {"agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "agentic_hybrid_inv", "agentic_inv", "agentic_ai_inv", "multi_agent_inv"}:
+        elif strategy_mode in {"agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
             st.json(
                 {
                     "AGENTIC_MODE": "multi-agent orchestration (EMA+RSI + Donchian)",
@@ -1373,6 +1729,10 @@ def main() -> None:
 
     with tab_config:
         st.subheader("Parámetros de trading y filtros")
+        section_card(
+            "Trading Base",
+            "Define simbolo, modo de ejecucion y filtros generales de entrada para evitar operaciones de baja calidad.",
+        )
 
         symbol = st.text_input("Par de divisas", value=env_vals.get("SYMBOL", "EURUSD"))
         min_imp = st.number_input("Importancia mínima de evento", min_value=1, max_value=3, value=int(env_vals.get("EVENT_MIN_IMPORTANCE", "2")))
@@ -1388,12 +1748,15 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "ema_rsi_trend_inv", "agentic_hybrid", "agentic_hybrid_inv"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "ema_rsi_trend_inv", "agentic_hybrid", "agentic_hybrid_inv"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "ema_rsi_trend_inv", "agentic_hybrid", "agentic_hybrid_inv"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
-        st.markdown("### Parámetros de estrategia")
+        section_card(
+            "Motores de Estrategia",
+            "Ajusta sensibilidad de ZScore, Momentum, Donchian y EMA/RSI. Modifica solo una familia por vez.",
+        )
         z_lookback = st.number_input(
             "Z_SCORE_LOOKBACK_SECONDS",
             min_value=30,
@@ -1578,7 +1941,10 @@ def main() -> None:
             step=1,
             help="Frecuencia de evaluación en segundos cuando la estrategia opera sin eventos.",
         )
-        st.markdown("### Parámetros Agentic IA")
+        section_card(
+            "Agentic IA",
+            "Controla aprendizaje online, exploracion y horizonte de recompensa del orquestador multiagente.",
+        )
         agentic_learning_rate = st.number_input(
             "AGENTIC_LEARNING_RATE",
             min_value=0.01,
@@ -1628,11 +1994,17 @@ def main() -> None:
             options=["sign", "quantile", "quantile_monthly"],
             index=["sign", "quantile", "quantile_monthly"].index(env_vals.get("DIRECTION_LABEL_MODE", "quantile_monthly")) if env_vals.get("DIRECTION_LABEL_MODE", "quantile_monthly") in ["sign", "quantile", "quantile_monthly"] else 2,
         )
-        st.markdown("### Preset semáforo")
+        section_card(
+            "Semaforo de Calidad",
+            "Umbrales usados por la UI para marcar oportunidades en verde/amarillo/rojo.",
+        )
         sem_min_signals_in = st.number_input("SEM_MIN_SIGNALS", min_value=1, max_value=1000, value=sem_min_signals, step=1)
         sem_min_edge_in = st.number_input("SEM_MIN_EDGE", min_value=0.0, max_value=1.0, value=float(sem_min_edge), step=0.01)
         sem_min_conf_in = st.number_input("SEM_MIN_CONF", min_value=0.0, max_value=1.0, value=float(sem_min_conf), step=0.01)
-        st.markdown("### Preset operativo")
+        section_card(
+            "Riesgo y Costos",
+            "Parametros para analisis monetario, costos netos y comportamiento por defecto de presets operativos.",
+        )
         ny_latam_default_in = st.selectbox(
             "NY_LATAM_PRESET_DEFAULT",
             options=["false", "true"],
@@ -2016,33 +2388,38 @@ def main() -> None:
         else:
             st.caption("Armado LIVE activo. Puedes ejecutar el comando con seguridad operativa reforzada.")
 
-        if st.button("Ver últimos registros de ejecución"):
-            p = PROJECT_ROOT / "data/paper_trades.csv"
-            if p.exists():
-                st.dataframe(pd.read_csv(p).tail(100), use_container_width=True)
-            else:
-                st.info("Aún no existe data/paper_trades.csv")
+        if paper_mode:
+            if st.button("Ver últimos registros de ejecución"):
+                p = PROJECT_ROOT / "data/paper_trades.csv"
+                if p.exists():
+                    st.dataframe(pd.read_csv(p).tail(100), use_container_width=True)
+                else:
+                    st.info("Aún no existe data/paper_trades.csv")
 
-        st.markdown("### Gráficos de operación")
-        st.caption("Fuente actual del dashboard: data/paper_trades.csv")
-        render_paper_trade_charts(
-            PROJECT_ROOT / "data/paper_trades.csv",
-            widget_prefix="live",
-            min_signals_sem=sem_min_signals,
-            min_edge_sem=sem_min_edge,
-            min_conf_sem=sem_min_conf,
-            utc_offset_hours=utc_offset_hours,
-            ny_latam_preset_default=ny_latam_preset_default,
-        )
+            st.markdown("### Gráficos de operación")
+            st.caption("Fuente actual del dashboard: data/paper_trades.csv")
+            render_paper_trade_charts(
+                PROJECT_ROOT / "data/paper_trades.csv",
+                widget_prefix="live",
+                min_signals_sem=sem_min_signals,
+                min_edge_sem=sem_min_edge,
+                min_conf_sem=sem_min_conf,
+                utc_offset_hours=utc_offset_hours,
+                ny_latam_preset_default=ny_latam_preset_default,
+            )
 
-        with st.expander("Herramientas de prueba (paper)", expanded=False):
-            st.write("Utilidades de prueba para validar pipeline sin enviar órdenes reales.")
-            if not paper_mode:
-                st.warning("Herramientas de prueba bloqueadas porque el sistema está configurado en LIVE.")
-            if st.button("Ejecutar smoke test de pipeline", disabled=not paper_mode):
-                code, out = run_module("src.bootstrap")
-                st.code(out)
-                st.info(f"Exit code: {code}")
+            with st.expander("Herramientas de prueba (paper)", expanded=False):
+                st.write("Utilidades de prueba para validar pipeline sin enviar órdenes reales.")
+                if st.button("Ejecutar smoke test de pipeline"):
+                    code, out = run_module("src.bootstrap")
+                    st.code(out)
+                    st.info(f"Exit code: {code}")
+        else:
+            st.markdown("### Gráficos de operación")
+            st.info(
+                "Los gráficos de señales PAPER se ocultan en modo LIVE para evitar confusión. "
+                "Usa 'Histórico Operaciones' para ver posiciones y deals reales de MT5."
+            )
 
     with tab_history:
         render_trade_history_tab()

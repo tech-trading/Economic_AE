@@ -95,6 +95,29 @@ class Settings:
     eventless_eval_seconds: int = int(os.getenv("EVENTLESS_EVAL_SECONDS", "20"))
     live_activity_csv: str = os.getenv("LIVE_ACTIVITY_CSV", "data/live_activity.csv")
 
+    # --- Risk / exits (ATR-based preferred) ---
+    # Riesgo por trade (fracción del capital)
+    risk_per_trade: float = float(os.getenv("RISK_PER_TRADE", "0.005"))
+
+    # Stop loss: multiplicador de ATR (ej. 1.5 × ATR)
+    sl_atr_multiplier: float = float(os.getenv("SL_ATR_MULTIPLIER", "1.5"))
+
+    # Take profit: ratio respecto al SL (TP = TP_SL_RATIO × SL)
+    tp_sl_ratio: float = float(os.getenv("TP_SL_RATIO", "2.0"))
+
+    # Trailing
+    trail_activation_r: float = float(os.getenv("TRAIL_ACTIVATION_R", "1.0"))
+    trail_atr_multiplier: float = float(os.getenv("TRAIL_ATR_MULTIPLIER", "0.75"))
+    trail_step_atr: float = float(os.getenv("TRAIL_STEP_ATR", "0.5"))
+
+    # Presets por horizonte (opcionales)
+    scalp_sl_atr_multiplier: float = float(os.getenv("SCALP_SL_ATR_MULTIPLIER", "0.5"))
+    scalp_tp_sl_ratio: float = float(os.getenv("SCALP_TP_SL_RATIO", "1.0"))
+    intraday_sl_atr_multiplier: float = float(os.getenv("INTRADAY_SL_ATR_MULTIPLIER", "1.0"))
+    intraday_tp_sl_ratio: float = float(os.getenv("INTRADAY_TP_SL_RATIO", "1.5"))
+    swing_sl_atr_multiplier: float = float(os.getenv("SWING_SL_ATR_MULTIPLIER", "3.0"))
+    swing_tp_sl_ratio: float = float(os.getenv("SWING_TP_SL_RATIO", "2.0"))
+
     @property
     def local_tz(self) -> timezone:
         return timezone(timedelta(hours=self.utc_offset_hours))

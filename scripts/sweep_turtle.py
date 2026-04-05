@@ -58,7 +58,7 @@ def evaluate_combo(
         results.append((is_correct, pnl_proxy))
 
     n = len(results)
-    if n < 25:
+    if n < 10:
         return None
 
     acc = sum(1 for r in results if r[0]) / n
@@ -93,6 +93,7 @@ def main() -> None:
     parser.add_argument("--market-csv", default=settings.market_csv)
     parser.add_argument("--output", default=str(Path(settings.model_dir) / "turtle_sweep_best.json"))
     parser.add_argument("--quick", action="store_true", help="Reduce combinaciones para ejecucion rapida.")
+    parser.add_argument("--ultra-quick", action="store_true", help="Barrido minimo para resultado en pocos minutos.")
     args = parser.parse_args()
 
     events_path = Path(args.events_csv)
@@ -109,26 +110,37 @@ def main() -> None:
     if bundle.X_tabular.empty:
         raise RuntimeError("No se pudo construir dataset para sweep (X_tabular vacio).")
 
-    if args.quick:
-        lookbacks = [900, 1200, 1800]
-        buffers = [0.20, 0.30, 0.40]
-        min_channels = [1.0, 1.2, 1.5]
+    if args.ultra_quick:
+        lookbacks = [1800, 3600]
+        buffers = [0.02, 0.05, 0.10]
+        min_channels = [0.005, 0.01, 0.02, 0.05]
+        confirms = [2]
+        atr_periods = [80, 120]
+        min_atrs = [0.03, 0.05, 0.08]
+        trend_emas = [140, 180]
+        max_exts = [2.2, 2.8]
+        cooldowns = [240, 300]
+    elif args.quick:
+        lookbacks = [1200, 1800, 3600, 7200]
+        buffers = [0.02, 0.05, 0.10, 0.20]
+        min_channels = [0.005, 0.01, 0.02, 0.05, 0.10]
         confirms = [1, 2]
         atr_periods = [80, 120]
-        min_atrs = [0.06, 0.08, 0.12]
+        min_atrs = [0.03, 0.05, 0.08, 0.12]
         trend_emas = [120, 180]
         max_exts = [2.0, 2.5]
         cooldowns = [180, 240, 300]
     else:
-        lookbacks = [600, 900, 1200, 1800, 2400]
-        buffers = [0.10, 0.20, 0.30, 0.40]
-        min_channels = [0.8, 1.0, 1.2, 1.5, 2.0]
-        confirms = [1, 2, 3]
-        atr_periods = [60, 80, 120, 180]
-        min_atrs = [0.05, 0.08, 0.12, 0.18]
-        trend_emas = [100, 140, 180, 240]
-        max_exts = [1.8, 2.2, 2.8, 3.2]
-        cooldowns = [120, 180, 240, 300, 360]
+        # Normal mode: broad enough for optimization, compact enough to finish in practical time.
+        lookbacks = [1200, 1800, 3600, 5400, 7200]
+        buffers = [0.02, 0.05, 0.10, 0.20]
+        min_channels = [0.005, 0.01, 0.02, 0.05, 0.10, 0.20]
+        confirms = [1, 2]
+        atr_periods = [80, 120, 180]
+        min_atrs = [0.03, 0.05, 0.08, 0.12]
+        trend_emas = [120, 180, 240]
+        max_exts = [2.0, 2.5, 3.0]
+        cooldowns = [180, 240, 300]
 
     combos: list[dict[str, float | int]] = []
     for lookback in lookbacks:
@@ -160,10 +172,12 @@ def main() -> None:
     }
 
     scored: list[dict[str, float | int]] = []
-    for combo in combos:
+    for idx, combo in enumerate(combos, start=1):
         row = evaluate_combo(bundle, ticks, settings, policy, combo)
         if row is not None:
             scored.append(row)
+        if idx % 500 == 0 or idx == len(combos):
+            print(f"progress {idx}/{len(combos)} valid={len(scored)}")
 
     if not scored:
         raise RuntimeError("Sweep sin resultados validos (ninguna combinacion supero el minimo de senales).")
@@ -181,6 +195,7 @@ def main() -> None:
             "tested_combinations": len(combos),
             "valid_combinations": len(scored),
             "quick": bool(args.quick),
+            "ultra_quick": bool(args.ultra_quick),
         },
     }
 

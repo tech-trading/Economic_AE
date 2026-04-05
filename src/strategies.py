@@ -334,12 +334,13 @@ class TurtleAtrBreakoutStrategy(Strategy):
 
     def __init__(
         self,
-        lookback_seconds: int = 1200,
-        breakout_buffer_pips: float = 0.30,
-        min_channel_pips: float = 1.20,
-        confirm_ticks: int = 2,
+        lookback_seconds: int = 3600,
+        breakout_buffer_pips: float = 0.10,
+        min_channel_pips: float = 0.02,
+        confirm_ticks: int = 1,
         atr_period_ticks: int = 120,
         min_atr_pips: float = 0.08,
+        trigger_quantile: float = 0.85,
         trend_ema_span: int = 180,
         max_extension_atr: float = 2.50,
         signal_cooldown_seconds: int = 240,
@@ -350,6 +351,7 @@ class TurtleAtrBreakoutStrategy(Strategy):
         self.confirm_ticks = max(1, int(confirm_ticks))
         self.atr_period_ticks = max(20, int(atr_period_ticks))
         self.min_atr_pips = max(0.0, float(min_atr_pips))
+        self.trigger_quantile = float(np.clip(trigger_quantile, 0.65, 0.95))
         self.trend_ema_span = max(20, int(trend_ema_span))
         self.max_extension_atr = max(0.5, float(max_extension_atr))
         self.signal_cooldown_seconds = max(0, int(signal_cooldown_seconds))
@@ -416,13 +418,21 @@ class TurtleAtrBreakoutStrategy(Strategy):
             return None
 
         ema_trend = float(mid.ewm(span=self.trend_ema_span, adjust=False).mean().iat[-1])
-        extension_atr = abs(latest - ema_trend) / max(1e-12, atr_price)
-        if extension_atr > self.max_extension_atr:
+        extension_norm = abs(latest - ema_trend) / max(1e-12, max(channel_width, 2.0 * atr_price))
+        if extension_norm > self.max_extension_atr:
             return None
 
         buffer = self.breakout_buffer_pips * pip
         buy_break = bool((latest_block > (high + buffer)).all())
         sell_break = bool((latest_block < (low - buffer)).all())
+
+        # Fallback zone logic: enables sparse, trend-aligned entries when strict breakout confirmation is absent.
+        channel_pos = float(np.clip((latest - low) / channel_width, 0.0, 1.0))
+        buy_zone = channel_pos >= self.trigger_quantile
+        sell_zone = channel_pos <= (1.0 - self.trigger_quantile)
+        if not buy_break and not sell_break:
+            buy_break = buy_zone
+            sell_break = sell_zone
 
         # trend filter
         if buy_break and latest < ema_trend:
@@ -515,6 +525,7 @@ class AgenticHybridStrategy(Strategy):
             confirm_ticks=int(getattr(settings, "turtle_confirm_ticks", 2)),
             atr_period_ticks=int(getattr(settings, "turtle_atr_period_ticks", 120)),
             min_atr_pips=float(getattr(settings, "turtle_min_atr_pips", 0.08)),
+            trigger_quantile=float(getattr(settings, "turtle_trigger_quantile", 0.85)),
             trend_ema_span=int(getattr(settings, "turtle_trend_ema_span", 180)),
             max_extension_atr=float(getattr(settings, "turtle_max_extension_atr", 2.50)),
             signal_cooldown_seconds=int(getattr(settings, "turtle_signal_cooldown_seconds", 240)),
@@ -824,6 +835,7 @@ def _build_strategy(name: str, settings, policy: dict) -> Strategy:
             confirm_ticks=int(getattr(settings, "turtle_confirm_ticks", 2)),
             atr_period_ticks=int(getattr(settings, "turtle_atr_period_ticks", 120)),
             min_atr_pips=float(getattr(settings, "turtle_min_atr_pips", 0.08)),
+            trigger_quantile=float(getattr(settings, "turtle_trigger_quantile", 0.85)),
             trend_ema_span=int(getattr(settings, "turtle_trend_ema_span", 180)),
             max_extension_atr=float(getattr(settings, "turtle_max_extension_atr", 2.50)),
             signal_cooldown_seconds=int(getattr(settings, "turtle_signal_cooldown_seconds", 240)),

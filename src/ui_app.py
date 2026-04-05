@@ -1680,6 +1680,7 @@ def main() -> None:
                     "TURTLE_CONFIRM_TICKS": parse_int(env_vals.get("TURTLE_CONFIRM_TICKS"), 2),
                     "TURTLE_ATR_PERIOD_TICKS": parse_int(env_vals.get("TURTLE_ATR_PERIOD_TICKS"), 120),
                     "TURTLE_MIN_ATR_PIPS": parse_float(env_vals.get("TURTLE_MIN_ATR_PIPS"), 0.08),
+                    "TURTLE_TRIGGER_QUANTILE": parse_float(env_vals.get("TURTLE_TRIGGER_QUANTILE"), 0.85),
                     "TURTLE_TREND_EMA_SPAN": parse_int(env_vals.get("TURTLE_TREND_EMA_SPAN"), 180),
                     "TURTLE_MAX_EXTENSION_ATR": parse_float(env_vals.get("TURTLE_MAX_EXTENSION_ATR"), 2.50),
                     "TURTLE_SIGNAL_COOLDOWN_SECONDS": parse_int(env_vals.get("TURTLE_SIGNAL_COOLDOWN_SECONDS"), 240),

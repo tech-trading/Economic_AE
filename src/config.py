@@ -57,11 +57,15 @@ class Settings:
         "https://www.investing.com/rss/news_25.rss,https://feeds.reuters.com/reuters/businessNews,https://www.fxstreet.com/rss/news,https://feeds.marketwatch.com/marketwatch/topstories/",
     )
     fundamental_news_lookback_minutes: int = int(os.getenv("FUNDAMENTAL_NEWS_LOOKBACK_MINUTES", "240"))
+    fundamental_news_poll_seconds: int = int(os.getenv("FUNDAMENTAL_NEWS_POLL_SECONDS", "20"))
     fundamental_news_timeout_seconds: int = int(os.getenv("FUNDAMENTAL_NEWS_TIMEOUT_SECONDS", "8"))
     fundamental_max_headlines: int = int(os.getenv("FUNDAMENTAL_MAX_HEADLINES", "30"))
     fundamental_max_headlines_per_source: int = int(os.getenv("FUNDAMENTAL_MAX_HEADLINES_PER_SOURCE", "8"))
     fundamental_signal_cooldown_seconds: int = int(os.getenv("FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS", "300"))
     fundamental_min_confidence: float = float(os.getenv("FUNDAMENTAL_MIN_CONFIDENCE", "0.60"))
+    fundamental_decision_threshold: float = float(os.getenv("FUNDAMENTAL_DECISION_THRESHOLD", "-1"))
+    fundamental_reanalyze_seconds: int = int(os.getenv("FUNDAMENTAL_REANALYZE_SECONDS", "15"))
+    fundamental_allow_same_side_on_news_change: bool = os.getenv("FUNDAMENTAL_ALLOW_SAME_SIDE_ON_NEWS_CHANGE", "true").strip().lower() in {"1", "true", "yes", "y"}
     fundamental_use_heuristic_fallback: bool = os.getenv("FUNDAMENTAL_USE_HEURISTIC_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "y"}
     fundamental_user_agent: str = os.getenv("FUNDAMENTAL_USER_AGENT", "EconomicAE/1.0 (+research)")
 
@@ -75,7 +79,7 @@ class Settings:
 
     # Gemini shortcut variables (used as fallback when FUNDAMENTAL_LLM_API_KEY is empty)
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
     gemini_openai_base_url: str = os.getenv("GEMINI_OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
 
     z_score_lookback_seconds: int = int(os.getenv("Z_SCORE_LOOKBACK_SECONDS", "300"))

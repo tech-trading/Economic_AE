@@ -203,7 +203,11 @@ This process creates/updates:
 - Main env vars:
 	- `FUNDAMENTAL_NEWS_SOURCES`
 	- `FUNDAMENTAL_NEWS_LOOKBACK_MINUTES`
+	- `FUNDAMENTAL_NEWS_POLL_SECONDS` (cada cuánto refrescar RSS)
 	- `FUNDAMENTAL_MIN_CONFIDENCE`
+	- `FUNDAMENTAL_DECISION_THRESHOLD` (override específico para fundamental)
+	- `FUNDAMENTAL_REANALYZE_SECONDS` (cache corto para evitar re-llamadas iguales)
+	- `FUNDAMENTAL_ALLOW_SAME_SIDE_ON_NEWS_CHANGE` (permite repetir lado si cambió la noticia)
 	- `FUNDAMENTAL_LLM_API_BASE_URL`
 	- `FUNDAMENTAL_LLM_API_KEY`
 	- `FUNDAMENTAL_LLM_MODEL`

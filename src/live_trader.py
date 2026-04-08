@@ -82,6 +82,14 @@ class LiveTrader:
                         decision = self._build_decision(context_event, target_symbol)
                         if decision is not None:
                             eventless_id = str(context_event.get("event_id", pseudo_event["event_id"]))
+                            allow_same_side_override = False
+                            meta_getter = getattr(self.strategy, "get_last_signal_meta", None)
+                            if callable(meta_getter):
+                                try:
+                                    meta = meta_getter() or {}
+                                    allow_same_side_override = bool(meta.get("news_changed", False))
+                                except Exception:
+                                    allow_same_side_override = False
                             if settings.paper_trading:
                                 self._record_paper_trade(eventless_id, context_event, decision, target_symbol)
                                 self._log_activity(action="paper_signal_eventless", event_id=eventless_id, detail=f"side={decision.side},confidence={decision.confidence:.4f},symbol={target_symbol},route={routing_reason}", symbol=target_symbol)
@@ -90,7 +98,7 @@ class LiveTrader:
                                 open_positions = self.executor.count_open_positions(target_symbol)
                                 if open_positions >= settings.max_open_positions:
                                     self._log_activity(action="skip_max_open_positions", event_id=eventless_id, detail=f"open_positions={open_positions},symbol={target_symbol},route={routing_reason}", symbol=target_symbol)
-                                elif not self._can_send_order(now, str(decision.side), eventless_id):
+                                elif not self._can_send_order(now, str(decision.side), eventless_id, allow_same_side_override=allow_same_side_override):
                                     pass
                                 else:
                                     self.executor.send_market_order(target_symbol, decision)
@@ -120,6 +128,14 @@ class LiveTrader:
                     target_symbol, routing_reason = self._resolve_symbol_for_event(next_event)
                     decision = self._build_decision(next_event, target_symbol)
                     if decision is not None:
+                        allow_same_side_override = False
+                        meta_getter = getattr(self.strategy, "get_last_signal_meta", None)
+                        if callable(meta_getter):
+                            try:
+                                meta = meta_getter() or {}
+                                allow_same_side_override = bool(meta.get("news_changed", False))
+                            except Exception:
+                                allow_same_side_override = False
                         if decision.confidence < self.policy["decision_threshold"]:
                             self._log_activity(action="skip_threshold", event_id=event_id, detail=f"confidence={decision.confidence:.4f},symbol={target_symbol}", symbol=target_symbol)
                             time.sleep(max(1, settings.live_loop_sleep_seconds))
@@ -145,7 +161,7 @@ class LiveTrader:
                                 already_traded_event_ids.add(event_id)
                                 time.sleep(max(1, settings.live_loop_sleep_seconds))
                                 continue
-                            if not self._can_send_order(now, str(decision.side), event_id):
+                            if not self._can_send_order(now, str(decision.side), event_id, allow_same_side_override=allow_same_side_override):
                                 time.sleep(max(1, settings.live_loop_sleep_seconds))
                                 continue
 
@@ -312,7 +328,7 @@ class LiveTrader:
         while self._recent_order_times and (now - self._recent_order_times[0]).total_seconds() > 3600:
             self._recent_order_times.popleft()
 
-    def _can_send_order(self, now: datetime, side: str, event_id: str) -> bool:
+    def _can_send_order(self, now: datetime, side: str, event_id: str, allow_same_side_override: bool = False) -> bool:
         self._prune_recent_orders(now)
 
         min_gap = max(0, int(getattr(settings, "min_seconds_between_trades", 0)))
@@ -332,6 +348,7 @@ class LiveTrader:
             same_side_gap > 0
             and self._last_order_side == str(side).upper()
             and self._last_order_utc is not None
+            and not allow_same_side_override
         ):
             elapsed_side = float((now - self._last_order_utc).total_seconds())
             if elapsed_side < same_side_gap:

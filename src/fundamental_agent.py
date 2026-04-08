@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
+from typing import Any
 
 import requests
 
@@ -25,6 +27,9 @@ class FundamentalDecision:
     confidence: float
     rationale: str
     headlines_used: int
+    analysis_source: str = "unknown"
+    news_signature: str = ""
+    news_changed: bool = False
 
 
 def _safe_float(value, default: float) -> float:
@@ -32,6 +37,43 @@ def _safe_float(value, default: float) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    # Fast path for strict JSON-only responses.
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    # Common model behavior: wrap JSON in markdown code fences.
+    fence = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw, flags=re.IGNORECASE)
+    if fence:
+        try:
+            obj = json.loads(fence.group(1))
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+
+    # Last resort: find a JSON object span in free-form text.
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        candidate = raw[start : end + 1]
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            return None
+    return None
 
 
 def _parse_published_utc(text: str) -> datetime | None:
@@ -157,7 +199,9 @@ class OpenAICompatibleFundamentalLLM:
             resp.raise_for_status()
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            obj = json.loads(text) if isinstance(text, str) else {}
+            obj = _extract_json_object(text) if isinstance(text, str) else None
+            if obj is None:
+                return None
             action = str(obj.get("action", "HOLD")).strip().upper()
             if action not in {"BUY", "SELL", "HOLD"}:
                 action = "HOLD"
@@ -171,9 +215,11 @@ class OpenAICompatibleFundamentalLLM:
 class FundamentalNewsLLMEngine:
     def __init__(self, settings):
         self.lookback_minutes = max(30, int(getattr(settings, "fundamental_news_lookback_minutes", 240)))
+        self.news_poll_seconds = max(5, int(getattr(settings, "fundamental_news_poll_seconds", 20)))
         self.max_headlines = max(5, int(getattr(settings, "fundamental_max_headlines", 30)))
         self.max_headlines_per_source = max(2, int(getattr(settings, "fundamental_max_headlines_per_source", 8)))
         self.use_heuristic_fallback = bool(getattr(settings, "fundamental_use_heuristic_fallback", True))
+        self.reanalyze_seconds = max(5, int(getattr(settings, "fundamental_reanalyze_seconds", 15)))
 
         raw_sources = str(getattr(settings, "fundamental_news_sources", "")).strip()
         self.news_sources = [x.strip() for x in raw_sources.split(",") if x.strip()]
@@ -191,7 +237,7 @@ class FundamentalNewsLLMEngine:
             # Gemini fallback path (OpenAI-compatible endpoint)
             api_base_url = str(getattr(settings, "gemini_openai_base_url", "https://generativelanguage.googleapis.com/v1beta/openai")).strip()
             api_key = str(getattr(settings, "gemini_api_key", "")).strip()
-            model = str(getattr(settings, "gemini_model", "gemini-3.1-pro")).strip()
+            model = str(getattr(settings, "gemini_model", "gemini-3.1-pro-preview")).strip()
 
         self.llm = OpenAICompatibleFundamentalLLM(
             api_base_url=api_base_url,
@@ -201,19 +247,93 @@ class FundamentalNewsLLMEngine:
             temperature=float(getattr(settings, "fundamental_llm_temperature", 0.1)),
             max_tokens=int(getattr(settings, "fundamental_llm_max_tokens", 250)),
         )
+        self._last_news_signature: str = ""
+        self._last_decision: FundamentalDecision | None = None
+        self._last_analysis_utc: datetime | None = None
+        self._last_headlines: list[NewsItem] = []
+        self._last_headlines_fetch_utc: datetime | None = None
 
     def analyze(self, symbol: str) -> FundamentalDecision:
         asset_class = _infer_asset_class(symbol)
-        headlines = self._fetch_recent_headlines()
+        headlines = self._get_recent_headlines_cached()
+        signature = self._headlines_signature(headlines)
+        news_changed = bool(signature and signature != self._last_news_signature)
+        now_utc = datetime.now(timezone.utc)
+
+        if (
+            not news_changed
+            and self._last_decision is not None
+            and self._last_analysis_utc is not None
+            and (now_utc - self._last_analysis_utc).total_seconds() < float(self.reanalyze_seconds)
+        ):
+            d = self._last_decision
+            return FundamentalDecision(
+                action=d.action,
+                confidence=d.confidence,
+                rationale=d.rationale,
+                headlines_used=len(headlines),
+                analysis_source="cache",
+                news_signature=signature,
+                news_changed=False,
+            )
 
         llm_out = self.llm.analyze(symbol=symbol, asset_class=asset_class, headlines=headlines)
         if llm_out is not None:
-            return llm_out
+            decision = FundamentalDecision(
+                action=llm_out.action,
+                confidence=llm_out.confidence,
+                rationale=llm_out.rationale,
+                headlines_used=len(headlines),
+                analysis_source="llm",
+                news_signature=signature,
+                news_changed=news_changed,
+            )
+            self._last_news_signature = signature
+            self._last_decision = decision
+            self._last_analysis_utc = now_utc
+            return decision
 
         if self.use_heuristic_fallback:
-            return _heuristic_fundamental_decision(headlines)
+            heuristic = _heuristic_fundamental_decision(headlines)
+            decision = FundamentalDecision(
+                action=heuristic.action,
+                confidence=heuristic.confidence,
+                rationale=heuristic.rationale,
+                headlines_used=len(headlines),
+                analysis_source="heuristic",
+                news_signature=signature,
+                news_changed=news_changed,
+            )
+            self._last_news_signature = signature
+            self._last_decision = decision
+            self._last_analysis_utc = now_utc
+            return decision
 
-        return FundamentalDecision(action="HOLD", confidence=0.0, rationale="No LLM response and fallback disabled.", headlines_used=len(headlines))
+        decision = FundamentalDecision(
+            action="HOLD",
+            confidence=0.0,
+            rationale="No LLM response and fallback disabled.",
+            headlines_used=len(headlines),
+            analysis_source="none",
+            news_signature=signature,
+            news_changed=news_changed,
+        )
+        self._last_news_signature = signature
+        self._last_decision = decision
+        self._last_analysis_utc = now_utc
+        return decision
+
+    def _get_recent_headlines_cached(self) -> list[NewsItem]:
+        now_utc = datetime.now(timezone.utc)
+        if self._last_headlines_fetch_utc is not None:
+            elapsed = float((now_utc - self._last_headlines_fetch_utc).total_seconds())
+            if elapsed < float(self.news_poll_seconds):
+                return list(self._last_headlines)
+
+        headlines = self._fetch_recent_headlines()
+        self._last_headlines = list(headlines)
+        self._last_headlines_fetch_utc = now_utc
+        return headlines
 
     def _fetch_recent_headlines(self) -> list[NewsItem]:
         if not self.news_sources:
@@ -234,6 +354,17 @@ class FundamentalNewsLLMEngine:
 
         items.sort(key=lambda x: x.published_utc or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
         return items[: self.max_headlines]
+
+    @staticmethod
+    def _headlines_signature(headlines: list[NewsItem]) -> str:
+        if not headlines:
+            return ""
+        normalized = []
+        for h in headlines:
+            ts = h.published_utc.isoformat() if h.published_utc else ""
+            normalized.append(f"{h.source}|{h.title}|{ts}")
+        joined = "\n".join(normalized)
+        return hashlib.sha1(joined.encode("utf-8", errors="ignore")).hexdigest()
 
 
 def _extract_hostname(url: str) -> str:

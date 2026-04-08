@@ -482,8 +482,20 @@ class FundamentalLLMStrategy(Strategy):
         self.engine = FundamentalNewsLLMEngine(settings=settings)
         self.signal_cooldown_seconds = max(0, int(getattr(settings, "fundamental_signal_cooldown_seconds", 300)))
         self.min_confidence = float(np.clip(getattr(settings, "fundamental_min_confidence", 0.60), 0.50, 0.95))
+        self.decision_threshold_override = float(getattr(settings, "fundamental_decision_threshold", -1.0))
+        self.allow_same_side_on_news_change = bool(getattr(settings, "fundamental_allow_same_side_on_news_change", True))
         self._last_signal_side: str | None = None
         self._last_signal_ts: pd.Timestamp | None = None
+        self._last_news_changed: bool = False
+        self._last_news_signature: str = ""
+        self._last_analysis_source: str = ""
+
+    def get_last_signal_meta(self) -> dict[str, Any]:
+        return {
+            "news_changed": bool(self._last_news_changed),
+            "news_signature": str(self._last_news_signature),
+            "analysis_source": str(self._last_analysis_source),
+        }
 
     def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
         now_ts = pd.Timestamp.now(tz="UTC")
@@ -499,10 +511,17 @@ class FundamentalLLMStrategy(Strategy):
 
         action = str(getattr(result, "action", "HOLD")).upper()
         confidence = float(np.clip(getattr(result, "confidence", 0.0), 0.0, 1.0))
+        self._last_news_changed = bool(getattr(result, "news_changed", False))
+        self._last_news_signature = str(getattr(result, "news_signature", ""))
+        self._last_analysis_source = str(getattr(result, "analysis_source", ""))
         if action not in {"BUY", "SELL"}:
             return None
 
-        threshold = max(float(policy.get("decision_threshold", 0.5)), self.min_confidence)
+        override = float(self.decision_threshold_override)
+        if override > 0.0:
+            threshold = max(self.min_confidence, float(np.clip(override, 0.50, 0.95)))
+        else:
+            threshold = max(float(policy.get("decision_threshold", 0.5)), self.min_confidence)
         if confidence < threshold:
             return None
 
@@ -513,7 +532,10 @@ class FundamentalLLMStrategy(Strategy):
         ):
             elapsed = float((now_ts - self._last_signal_ts).total_seconds())
             if elapsed < float(self.signal_cooldown_seconds):
-                return None
+                if self.allow_same_side_on_news_change and self._last_news_changed:
+                    pass
+                else:
+                    return None
 
         direction = 1.0 if action == "BUY" else -1.0
         proba_buy = float(np.clip(0.5 + direction * min(0.49, 0.10 + 0.40 * confidence), 0.01, 0.99))

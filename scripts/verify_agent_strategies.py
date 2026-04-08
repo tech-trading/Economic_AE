@@ -52,6 +52,9 @@ def main() -> int:
     cfg = SimpleNamespace(**vars(settings))
     cfg.agent_manage_all_strategies = True
     cfg.agentic_state_path = os.path.join("models", "agentic_state_verify_tmp.json")
+    cfg.fundamental_news_sources = ""
+    cfg.fundamental_llm_api_key = ""
+    cfg.fundamental_use_heuristic_fallback = True
 
     policy = {
         "decision_threshold": 0.50,

@@ -1,0 +1,224 @@
+{
+  "best": {
+    "score": 0.9866959939593256,
+    "accuracy": 1.0,
+    "signals": 53,
+    "avg_pnl_proxy": 0.00039136663310736474,
+    "total_pnl_proxy": 0.02074243155469033,
+    "lookback": 600,
+    "threshold": 0.0002,
+    "weight": 0.5,
+    "mode": "conjunctive"
+  },
+  "top20": [
+    {
+      "score": 0.9866959939593256,
+      "accuracy": 1.0,
+      "signals": 53,
+      "avg_pnl_proxy": 0.00039136663310736474,
+      "total_pnl_proxy": 0.02074243155469033,
+      "lookback": 600,
+      "threshold": 0.0002,
+      "weight": 0.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.9866959939593256,
+      "accuracy": 1.0,
+      "signals": 53,
+      "avg_pnl_proxy": 0.00039136663310736474,
+      "total_pnl_proxy": 0.02074243155469033,
+      "lookback": 600,
+      "threshold": 0.0002,
+      "weight": 1.0,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.9866959939593256,
+      "accuracy": 1.0,
+      "signals": 53,
+      "avg_pnl_proxy": 0.00039136663310736474,
+      "total_pnl_proxy": 0.02074243155469033,
+      "lookback": 600,
+      "threshold": 0.0002,
+      "weight": 1.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.9674837660045821,
+      "accuracy": 0.9814814814814815,
+      "signals": 54,
+      "avg_pnl_proxy": 0.0003805682473505589,
+      "total_pnl_proxy": 0.02055068535693018,
+      "lookback": 600,
+      "threshold": 0.0001,
+      "weight": 0.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.9674837660045821,
+      "accuracy": 0.9814814814814815,
+      "signals": 54,
+      "avg_pnl_proxy": 0.0003805682473505589,
+      "total_pnl_proxy": 0.02055068535693018,
+      "lookback": 600,
+      "threshold": 0.0001,
+      "weight": 1.0,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.9674837660045821,
+      "accuracy": 0.9814814814814815,
+      "signals": 54,
+      "avg_pnl_proxy": 0.0003805682473505589,
+      "total_pnl_proxy": 0.02055068535693018,
+      "lookback": 600,
+      "threshold": 0.0001,
+      "weight": 1.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.6854164194316119,
+      "accuracy": 0.6818181818181818,
+      "signals": 88,
+      "avg_pnl_proxy": 0.00024221243118572333,
+      "total_pnl_proxy": 0.021314693944343654,
+      "lookback": 600,
+      "threshold": 5e-05,
+      "weight": 0.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.6854164194316119,
+      "accuracy": 0.6818181818181818,
+      "signals": 88,
+      "avg_pnl_proxy": 0.00024221243118572333,
+      "total_pnl_proxy": 0.021314693944343654,
+      "lookback": 600,
+      "threshold": 5e-05,
+      "weight": 1.0,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.6854164194316119,
+      "accuracy": 0.6818181818181818,
+      "signals": 88,
+      "avg_pnl_proxy": 0.00024221243118572333,
+      "total_pnl_proxy": 0.021314693944343654,
+      "lookback": 600,
+      "threshold": 5e-05,
+      "weight": 1.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.23574552943403887,
+      "accuracy": 0.3548387096774194,
+      "signals": 31,
+      "avg_pnl_proxy": -4.3573223574335956e-05,
+      "total_pnl_proxy": -0.0013507699308044146,
+      "lookback": 60,
+      "threshold": 5e-05,
+      "weight": 0.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.23574552943403887,
+      "accuracy": 0.3548387096774194,
+      "signals": 31,
+      "avg_pnl_proxy": -4.3573223574335956e-05,
+      "total_pnl_proxy": -0.0013507699308044146,
+      "lookback": 60,
+      "threshold": 5e-05,
+      "weight": 1.0,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.23574552943403887,
+      "accuracy": 0.3548387096774194,
+      "signals": 31,
+      "avg_pnl_proxy": -4.3573223574335956e-05,
+      "total_pnl_proxy": -0.0013507699308044146,
+      "lookback": 60,
+      "threshold": 5e-05,
+      "weight": 1.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.021973235372331687,
+      "accuracy": 0.16666666666666666,
+      "signals": 24,
+      "avg_pnl_proxy": -0.00013718572941297217,
+      "total_pnl_proxy": -0.003292457505911332,
+      "lookback": 120,
+      "threshold": 5e-05,
+      "weight": 0.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.021973235372331687,
+      "accuracy": 0.16666666666666666,
+      "signals": 24,
+      "avg_pnl_proxy": -0.00013718572941297217,
+      "total_pnl_proxy": -0.003292457505911332,
+      "lookback": 120,
+      "threshold": 5e-05,
+      "weight": 1.0,
+      "mode": "conjunctive"
+    },
+    {
+      "score": 0.021973235372331687,
+      "accuracy": 0.16666666666666666,
+      "signals": 24,
+      "avg_pnl_proxy": -0.00013718572941297217,
+      "total_pnl_proxy": -0.003292457505911332,
+      "lookback": 120,
+      "threshold": 5e-05,
+      "weight": 1.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": -0.11467770139535508,
+      "accuracy": 0.047619047619047616,
+      "signals": 21,
+      "avg_pnl_proxy": -0.0002141486056355705,
+      "total_pnl_proxy": -0.00449712071834698,
+      "lookback": 120,
+      "threshold": 0.0001,
+      "weight": 0.5,
+      "mode": "conjunctive"
+    },
+    {
+      "score": -0.11467770139535508,
+      "accuracy": 0.047619047619047616,
+      "signals": 21,
+      "avg_pnl_proxy": -0.0002141486056355705,
+      "total_pnl_proxy": -0.00449712071834698,
+      "lookback": 120,
+      "threshold": 0.0001,
+      "weight": 1.0,
+      "mode": "conjunctive"
+    },
+    {
+      "score": -0.11467770139535508,
+      "accuracy": 0.047619047619047616,
+      "signals": 21,
+      "avg_pnl_proxy": -0.0002141486056355705,
+      "total_pnl_proxy": -0.00449712071834698,
+      "lookback": 120,
+      "threshold": 0.0001,
+      "weight": 1.5,
+      "mode": "conjunctive"
+    }
+  ],
+  "meta": {
+    "events_csv": "data/events.csv",
+    "market_csv": "data/market_ticks.csv",
+    "horizon_seconds": 300,
+    "horizon_minutes": 5.0,
+    "min_post_ticks": 5,
+    "samples": 555,
+    "tested_combinations": 96,
+    "valid_combinations": 18,
+    "quick": true
+  }
+}

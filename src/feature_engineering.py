@@ -21,7 +21,15 @@ class DatasetBundle:
 
 def build_event_dataset(events: pd.DataFrame, market_ticks: pd.DataFrame, lookback_seconds: int = 300) -> DatasetBundle:
     if events.empty or market_ticks.empty:
-        return DatasetBundle(pd.DataFrame(), np.empty((0, 0, 0)), np.array([]), np.array([]), pd.Series(dtype="datetime64[ns, UTC]"))
+        return DatasetBundle(
+            X_tabular=pd.DataFrame(),
+            X_seq=np.empty((0, 0, 0)),
+            y_direction=np.array([]),
+            y_volatility=np.array([]),
+            event_times=pd.Series(dtype="datetime64[ns, UTC]"),
+            event_ids=pd.Series(dtype=object),
+            ret_post=np.array([]),
+        )
 
     ticks = market_ticks.copy()
     ticks["time_utc"] = pd.to_datetime(ticks["time_utc"], utc=True)

@@ -39,6 +39,45 @@ class Settings:
 
     # Strategy selection and Z-score parameters
     strategy: str = os.getenv("STRATEGY", "default")
+
+    # Dynamic symbol routing by impact news (currency/keyword driven)
+    impact_symbol_map: str = os.getenv(
+        "IMPACT_SYMBOL_MAP",
+        "USD=EURUSD|US500|XAUUSD;EUR=EURUSD|GER40;GBP=GBPUSD|UK100;JPY=USDJPY|JP225;CHF=USDCHF;CAD=USDCAD;AUD=AUDUSD;NZD=NZDUSD",
+    )
+    impact_keyword_symbol_map: str = os.getenv(
+        "IMPACT_KEYWORD_SYMBOL_MAP",
+        "oil=XTIUSD|WTI;crude=XTIUSD|WTI;brent=BRENT;gold=XAUUSD;silver=XAGUSD;gas=XNGUSD|NATGAS;nasdaq=NAS100|USTEC;sp500=US500|SPX500;dow=US30",
+    )
+    impact_symbol_fallback_to_default: bool = os.getenv("IMPACT_SYMBOL_FALLBACK_TO_DEFAULT", "true").strip().lower() in {"1", "true", "yes", "y"}
+
+    # Fundamental + LLM strategy parameters
+    fundamental_news_sources: str = os.getenv(
+        "FUNDAMENTAL_NEWS_SOURCES",
+        "https://www.investing.com/rss/news_25.rss,https://feeds.reuters.com/reuters/businessNews,https://www.fxstreet.com/rss/news,https://feeds.marketwatch.com/marketwatch/topstories/",
+    )
+    fundamental_news_lookback_minutes: int = int(os.getenv("FUNDAMENTAL_NEWS_LOOKBACK_MINUTES", "240"))
+    fundamental_news_timeout_seconds: int = int(os.getenv("FUNDAMENTAL_NEWS_TIMEOUT_SECONDS", "8"))
+    fundamental_max_headlines: int = int(os.getenv("FUNDAMENTAL_MAX_HEADLINES", "30"))
+    fundamental_max_headlines_per_source: int = int(os.getenv("FUNDAMENTAL_MAX_HEADLINES_PER_SOURCE", "8"))
+    fundamental_signal_cooldown_seconds: int = int(os.getenv("FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS", "300"))
+    fundamental_min_confidence: float = float(os.getenv("FUNDAMENTAL_MIN_CONFIDENCE", "0.60"))
+    fundamental_use_heuristic_fallback: bool = os.getenv("FUNDAMENTAL_USE_HEURISTIC_FALLBACK", "true").strip().lower() in {"1", "true", "yes", "y"}
+    fundamental_user_agent: str = os.getenv("FUNDAMENTAL_USER_AGENT", "EconomicAE/1.0 (+research)")
+
+    # OpenAI-compatible endpoint (works with OpenAI, Azure OpenAI compatible gateways, and similar APIs)
+    fundamental_llm_api_base_url: str = os.getenv("FUNDAMENTAL_LLM_API_BASE_URL", "https://api.openai.com/v1")
+    fundamental_llm_api_key: str = os.getenv("FUNDAMENTAL_LLM_API_KEY", "")
+    fundamental_llm_model: str = os.getenv("FUNDAMENTAL_LLM_MODEL", "gpt-4o-mini")
+    fundamental_llm_temperature: float = float(os.getenv("FUNDAMENTAL_LLM_TEMPERATURE", "0.10"))
+    fundamental_llm_max_tokens: int = int(os.getenv("FUNDAMENTAL_LLM_MAX_TOKENS", "250"))
+    fundamental_llm_timeout_seconds: int = int(os.getenv("FUNDAMENTAL_LLM_TIMEOUT_SECONDS", "12"))
+
+    # Gemini shortcut variables (used as fallback when FUNDAMENTAL_LLM_API_KEY is empty)
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.1-pro")
+    gemini_openai_base_url: str = os.getenv("GEMINI_OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+
     z_score_lookback_seconds: int = int(os.getenv("Z_SCORE_LOOKBACK_SECONDS", "300"))
     z_score_threshold: float = float(os.getenv("Z_SCORE_THRESHOLD", "0.7"))
     z_weight: float = float(os.getenv("Z_WEIGHT", "1.0"))

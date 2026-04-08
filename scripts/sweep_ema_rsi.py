@@ -10,15 +10,7 @@ import pandas as pd
 
 from src.config import settings
 from src.feature_engineering import build_event_dataset
-from src.models import load_tabular_artifacts
 from src.strategies import get_strategy
-
-
-def _bundle_slice(bundle, idx: int):
-    return SimpleNamespace(
-        X_tabular=bundle.X_tabular.iloc[[idx]].copy(),
-        X_seq=bundle.X_seq[idx: idx + 1] if hasattr(bundle, "X_seq") else np.zeros((1, 1, 1), dtype=np.float32),
-    )
 
 
 def _compute_eval_returns(bundle, ticks: pd.DataFrame, horizon_seconds: int, min_post_ticks: int) -> np.ndarray:
@@ -43,15 +35,22 @@ def _compute_eval_returns(bundle, ticks: pd.DataFrame, horizon_seconds: int, min
     return out
 
 
-def evaluate_combo(bundle, ticks, eval_returns, model, feat_cols, base_settings, policy, combo):
+def evaluate_combo(bundle, ticks, eval_returns, base_settings, policy, combo):
     cfg = SimpleNamespace(**vars(base_settings))
     cfg.agent_manage_all_strategies = False
-    cfg.momentum_lookback_seconds = int(combo["lookback"])
-    cfg.momentum_threshold = float(combo["threshold"])
-    cfg.momentum_weight = float(combo["weight"])
-    cfg.momentum_mode = str(combo["mode"])
+    cfg.ema_fast_span = int(combo["fast"])
+    cfg.ema_slow_span = int(combo["slow"])
+    cfg.ema_rsi_period = int(combo["rsi_period"])
+    cfg.ema_rsi_buy_level = float(combo["rsi_buy"])
+    cfg.ema_rsi_sell_level = float(combo["rsi_sell"])
+    cfg.ema_min_separation_pips = float(combo["min_sep"])
+    cfg.ema_momentum_lookback_ticks = int(combo["mom_lb"])
+    cfg.ema_min_momentum_pips = float(combo["min_mom"])
+    cfg.ema_vol_period = int(combo["vol_period"])
+    cfg.ema_min_vol_pips = float(combo["min_vol"])
+    cfg.ema_signal_cooldown_seconds = int(combo["cooldown"])
 
-    strat = get_strategy("momentum", cfg, policy)
+    strat = get_strategy("ema_rsi_trend", cfg, policy)
     times = ticks["time_utc"]
 
     n = 0
@@ -61,9 +60,7 @@ def evaluate_combo(bundle, ticks, eval_returns, model, feat_cols, base_settings,
     for i in range(bundle.X_tabular.shape[0]):
         ev_time = bundle.event_times.iloc[i]
         idx = int(times.searchsorted(ev_time, side="right"))
-
-        row_bundle = _bundle_slice(bundle, i)
-        dec = strat.decide(pd.Series(dtype=object), ticks.iloc[:idx], row_bundle, model, None, feat_cols, policy, cfg)
+        dec = strat.decide(pd.Series(dtype=object), ticks.iloc[:idx], None, None, None, None, policy, cfg)
         if dec is None:
             continue
 
@@ -81,8 +78,8 @@ def evaluate_combo(bundle, ticks, eval_returns, model, feat_cols, base_settings,
 
     acc = correct / n
     avg_pnl = pnl_sum / n
-    target_signals = 120.0
-    score = acc + (180.0 * avg_pnl) - (0.15 * abs(n - target_signals) / target_signals)
+    target_signals = 90.0
+    score = acc + (200.0 * avg_pnl) - (0.20 * abs(n - target_signals) / target_signals)
 
     return {
         "score": float(score),
@@ -90,21 +87,18 @@ def evaluate_combo(bundle, ticks, eval_returns, model, feat_cols, base_settings,
         "signals": int(n),
         "avg_pnl_proxy": float(avg_pnl),
         "total_pnl_proxy": float(pnl_sum),
-        "lookback": int(combo["lookback"]),
-        "threshold": float(combo["threshold"]),
-        "weight": float(combo["weight"]),
-        "mode": str(combo["mode"]),
+        **{k: (float(v) if isinstance(v, (float, np.floating)) else int(v)) for k, v in combo.items()},
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Sweep de Momentum orientado a precision.")
+    parser = argparse.ArgumentParser(description="Sweep EMA RSI trend orientado a precision.")
     parser.add_argument("--events-csv", default="data/events.csv")
     parser.add_argument("--market-csv", default="data/market_ticks.csv")
     parser.add_argument("--horizon-minutes", type=float, default=5.0)
     parser.add_argument("--horizon-seconds", type=int, default=None)
     parser.add_argument("--min-post-ticks", type=int, default=5)
-    parser.add_argument("--output", default=str(Path(settings.model_dir) / "momentum_sweep_best.json"))
+    parser.add_argument("--output", default=str(Path(settings.model_dir) / "ema_rsi_sweep_best.json"))
     parser.add_argument("--quick", action="store_true")
     args = parser.parse_args()
 
@@ -118,41 +112,76 @@ def main() -> None:
 
     bundle = build_event_dataset(events, ticks, lookback_seconds=settings.lookback_seconds)
     if bundle.X_tabular.empty:
-        raise RuntimeError("No dataset samples for momentum sweep")
+        raise RuntimeError("No dataset samples for EMA sweep")
 
-    model, feat_cols = load_tabular_artifacts(settings.model_dir)
     eval_returns = _compute_eval_returns(bundle, ticks, horizon_seconds=horizon_seconds, min_post_ticks=int(args.min_post_ticks))
 
     if args.quick:
-        lookbacks = [60, 120, 300, 600]
-        thresholds = [0.00005, 0.00010, 0.00020, 0.00050]
-        weights = [0.5, 1.0, 1.5]
-        modes = ["weighted", "conjunctive"]
+        fasts = [13, 21]
+        slows = [55, 89]
+        rsi_periods = [14]
+        rsi_buys = [56, 58]
+        rsi_sells = [44, 42]
+        min_seps = [0.05, 0.10, 0.20]
+        mom_lbs = [10, 20]
+        min_moms = [0.05, 0.10, 0.20]
+        vol_periods = [30, 40]
+        min_vols = [0.01, 0.03, 0.05]
+        cooldowns = [120, 180, 240]
     else:
-        lookbacks = [30, 60, 120, 300, 600, 1200, 1800]
-        thresholds = [0.00003, 0.00005, 0.00008, 0.00010, 0.00020, 0.00050, 0.00100]
-        weights = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
-        modes = ["weighted", "conjunctive"]
+        fasts = [8, 13, 21, 34]
+        slows = [34, 55, 89, 144]
+        rsi_periods = [10, 14]
+        rsi_buys = [54, 56, 58, 60]
+        rsi_sells = [46, 44, 42, 40]
+        min_seps = [0.03, 0.05, 0.10, 0.20, 0.40]
+        mom_lbs = [8, 10, 20, 30]
+        min_moms = [0.03, 0.05, 0.10, 0.20, 0.40]
+        vol_periods = [20, 30, 40, 60]
+        min_vols = [0.005, 0.01, 0.03, 0.05, 0.08]
+        cooldowns = [90, 120, 180, 240, 300]
 
     combos = []
-    for lb in lookbacks:
-        for thr in thresholds:
-            for w in weights:
-                for m in modes:
-                    combos.append({"lookback": lb, "threshold": thr, "weight": w, "mode": m})
+    for fast in fasts:
+        for slow in slows:
+            if slow <= fast:
+                continue
+            for rsi_period in rsi_periods:
+                for rsi_buy, rsi_sell in zip(rsi_buys, rsi_sells):
+                    for min_sep in min_seps:
+                        for mom_lb in mom_lbs:
+                            for min_mom in min_moms:
+                                for vol_period in vol_periods:
+                                    for min_vol in min_vols:
+                                        for cooldown in cooldowns:
+                                            combos.append(
+                                                {
+                                                    "fast": fast,
+                                                    "slow": slow,
+                                                    "rsi_period": rsi_period,
+                                                    "rsi_buy": rsi_buy,
+                                                    "rsi_sell": rsi_sell,
+                                                    "min_sep": min_sep,
+                                                    "mom_lb": mom_lb,
+                                                    "min_mom": min_mom,
+                                                    "vol_period": vol_period,
+                                                    "min_vol": min_vol,
+                                                    "cooldown": cooldown,
+                                                }
+                                            )
 
     policy = {"decision_threshold": settings.decision_threshold, "no_trade_band": settings.no_trade_band}
 
     scored = []
     for idx, combo in enumerate(combos, start=1):
-        row = evaluate_combo(bundle, ticks, eval_returns, model, feat_cols, settings, policy, combo)
+        row = evaluate_combo(bundle, ticks, eval_returns, settings, policy, combo)
         if row is not None:
             scored.append(row)
-        if idx % 100 == 0 or idx == len(combos):
+        if idx % 300 == 0 or idx == len(combos):
             print(f"progress {idx}/{len(combos)} valid={len(scored)}")
 
     if not scored:
-        raise RuntimeError("Momentum sweep without valid combinations")
+        raise RuntimeError("EMA sweep without valid combinations")
 
     scored = sorted(scored, key=lambda x: float(x["score"]), reverse=True)
     best = scored[0]
@@ -179,7 +208,7 @@ def main() -> None:
 
     cmp_dir = Path(settings.data_dir) / "comparison"
     cmp_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(scored).to_csv(cmp_dir / "momentum_sweep_results.csv", index=False)
+    pd.DataFrame(scored).to_csv(cmp_dir / "ema_rsi_sweep_results.csv", index=False)
 
     print(json.dumps(best, indent=2))
     print(f"Saved sweep result to {out_path}")

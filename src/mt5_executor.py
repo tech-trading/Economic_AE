@@ -53,6 +53,20 @@ class MT5Executor:
         df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True)
         return df[["time_utc", "bid", "ask"]].copy()
 
+    def is_symbol_tradeable(self, symbol: str) -> bool:
+        sym = str(symbol or "").strip()
+        if not sym:
+            return False
+        info = mt5.symbol_info(sym)
+        if info is None:
+            return False
+        if not info.visible:
+            mt5.symbol_select(sym, True)
+            info = mt5.symbol_info(sym)
+            if info is None:
+                return False
+        return True
+
     def send_market_order(self, symbol: str, decision: TradeDecision) -> dict:
         info = mt5.symbol_info(symbol)
         if info is None:

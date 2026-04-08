@@ -555,7 +555,7 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
-    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "turtle_atr", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "turtle_atr", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "fundamental_llm", "fundamental", "macro_llm", "news_llm"}:
         return {"status": "eventless_strategy", "path": str(events_csv_path)}
 
     if not events_csv_path.exists():
@@ -1716,6 +1716,22 @@ def main() -> None:
                     "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
                 }
             )
+        elif strategy_mode in {"fundamental_llm", "fundamental", "macro_llm", "news_llm"}:
+            st.json(
+                {
+                    "FUNDAMENTAL_NEWS_SOURCES": env_vals.get(
+                        "FUNDAMENTAL_NEWS_SOURCES",
+                        "https://www.investing.com/rss/news_25.rss,https://feeds.reuters.com/reuters/businessNews",
+                    ),
+                    "FUNDAMENTAL_NEWS_LOOKBACK_MINUTES": parse_int(env_vals.get("FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"), 240),
+                    "FUNDAMENTAL_MAX_HEADLINES": parse_int(env_vals.get("FUNDAMENTAL_MAX_HEADLINES"), 30),
+                    "FUNDAMENTAL_MIN_CONFIDENCE": parse_float(env_vals.get("FUNDAMENTAL_MIN_CONFIDENCE"), 0.60),
+                    "FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS": parse_int(env_vals.get("FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS"), 300),
+                    "FUNDAMENTAL_LLM_MODEL": env_vals.get("FUNDAMENTAL_LLM_MODEL", "gpt-4o-mini"),
+                    "FUNDAMENTAL_LLM_API_BASE_URL": env_vals.get("FUNDAMENTAL_LLM_API_BASE_URL", "https://api.openai.com/v1"),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
         else:
             st.caption("Usando estrategia base de ensemble (tabular + LSTM cuando esté disponible).")
 
@@ -1794,8 +1810,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
@@ -2035,6 +2051,66 @@ def main() -> None:
             value=env_vals.get("AGENTIC_STATE_PATH", "models/agentic_state.json"),
             help="Archivo donde Agentic IA guarda pesos aprendidos entre reinicios.",
         )
+        section_card(
+            "Fundamental + LLM",
+            "Analiza titulares macro/economicos de fuentes RSS y consulta un LLM para decidir BUY/SELL/HOLD sobre cualquier simbolo (forex, commodities, indices/futuros, acciones).",
+        )
+        fundamental_news_sources = st.text_area(
+            "FUNDAMENTAL_NEWS_SOURCES",
+            value=env_vals.get(
+                "FUNDAMENTAL_NEWS_SOURCES",
+                "https://www.investing.com/rss/news_25.rss,https://feeds.reuters.com/reuters/businessNews,https://www.fxstreet.com/rss/news,https://feeds.marketwatch.com/marketwatch/topstories/",
+            ),
+            help="URLs RSS separadas por coma.",
+        )
+        fundamental_lookback_minutes = st.number_input(
+            "FUNDAMENTAL_NEWS_LOOKBACK_MINUTES",
+            min_value=30,
+            max_value=1440,
+            value=parse_int(env_vals.get("FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"), 240),
+            step=30,
+        )
+        fundamental_max_headlines = st.number_input(
+            "FUNDAMENTAL_MAX_HEADLINES",
+            min_value=5,
+            max_value=200,
+            value=parse_int(env_vals.get("FUNDAMENTAL_MAX_HEADLINES"), 30),
+            step=5,
+        )
+        fundamental_min_conf = st.number_input(
+            "FUNDAMENTAL_MIN_CONFIDENCE",
+            min_value=0.50,
+            max_value=0.95,
+            value=parse_float(env_vals.get("FUNDAMENTAL_MIN_CONFIDENCE"), 0.60),
+            step=0.01,
+            format="%.2f",
+        )
+        fundamental_cooldown = st.number_input(
+            "FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS",
+            min_value=30,
+            max_value=7200,
+            value=parse_int(env_vals.get("FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS"), 300),
+            step=30,
+        )
+        fundamental_fallback = st.selectbox(
+            "FUNDAMENTAL_USE_HEURISTIC_FALLBACK",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("FUNDAMENTAL_USE_HEURISTIC_FALLBACK"), True) else 1,
+            help="Si el LLM no responde, usa fallback de sentimiento por keywords.",
+        )
+        fundamental_llm_base = st.text_input(
+            "FUNDAMENTAL_LLM_API_BASE_URL",
+            value=env_vals.get("FUNDAMENTAL_LLM_API_BASE_URL", "https://api.openai.com/v1"),
+        )
+        fundamental_llm_model = st.text_input(
+            "FUNDAMENTAL_LLM_MODEL",
+            value=env_vals.get("FUNDAMENTAL_LLM_MODEL", "gpt-4o-mini"),
+        )
+        fundamental_llm_key = st.text_input(
+            "FUNDAMENTAL_LLM_API_KEY",
+            value=env_vals.get("FUNDAMENTAL_LLM_API_KEY", ""),
+            type="password",
+        )
         label_mode = st.selectbox(
             "Modo de etiquetado",
             options=["sign", "quantile", "quantile_monthly"],
@@ -2129,6 +2205,15 @@ def main() -> None:
             env_vals["AGENTIC_REWARD_HORIZON_SECONDS"] = str(int(agentic_horizon))
             env_vals["AGENTIC_REWARD_TARGET_PIPS"] = f"{float(agentic_target_pips):.2f}"
             env_vals["AGENTIC_STATE_PATH"] = str(agentic_state_path).strip() or "models/agentic_state.json"
+            env_vals["FUNDAMENTAL_NEWS_SOURCES"] = str(fundamental_news_sources).replace("\n", ",").strip()
+            env_vals["FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"] = str(int(fundamental_lookback_minutes))
+            env_vals["FUNDAMENTAL_MAX_HEADLINES"] = str(int(fundamental_max_headlines))
+            env_vals["FUNDAMENTAL_MIN_CONFIDENCE"] = f"{float(fundamental_min_conf):.2f}"
+            env_vals["FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS"] = str(int(fundamental_cooldown))
+            env_vals["FUNDAMENTAL_USE_HEURISTIC_FALLBACK"] = fundamental_fallback
+            env_vals["FUNDAMENTAL_LLM_API_BASE_URL"] = str(fundamental_llm_base).strip()
+            env_vals["FUNDAMENTAL_LLM_MODEL"] = str(fundamental_llm_model).strip() or "gpt-4o-mini"
+            env_vals["FUNDAMENTAL_LLM_API_KEY"] = str(fundamental_llm_key).strip()
             env_vals["DIRECTION_LABEL_MODE"] = label_mode
             env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
             env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"

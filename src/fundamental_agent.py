@@ -1,0 +1,283 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+import xml.etree.ElementTree as ET
+
+import requests
+
+
+@dataclass
+class NewsItem:
+    source: str
+    title: str
+    summary: str
+    url: str
+    published_utc: datetime | None
+
+
+@dataclass
+class FundamentalDecision:
+    action: str
+    confidence: float
+    rationale: str
+    headlines_used: int
+
+
+def _safe_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _parse_published_utc(text: str) -> datetime | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = parsedate_to_datetime(raw)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+class RssNewsProvider:
+    def __init__(self, timeout_seconds: int = 8, user_agent: str = "EconomicAE/1.0 (+research)"):
+        self.timeout_seconds = max(2, int(timeout_seconds))
+        self.user_agent = str(user_agent)
+
+    def fetch(self, url: str, max_items: int = 8) -> list[NewsItem]:
+        if not url:
+            return []
+        headers = {"User-Agent": self.user_agent, "Accept": "application/rss+xml, application/xml, text/xml, */*"}
+        r = requests.get(url, headers=headers, timeout=self.timeout_seconds)
+        r.raise_for_status()
+
+        root = ET.fromstring(r.content)
+        items: list[NewsItem] = []
+        source = _extract_hostname(url)
+
+        for node in root.findall(".//item"):
+            title = (node.findtext("title") or "").strip()
+            link = (node.findtext("link") or "").strip()
+            summary = (node.findtext("description") or "").strip()
+            pub_raw = (node.findtext("pubDate") or node.findtext("published") or "").strip()
+            pub_utc = _parse_published_utc(pub_raw)
+            if not title:
+                continue
+            items.append(
+                NewsItem(
+                    source=source,
+                    title=_clean_html(title),
+                    summary=_clean_html(summary),
+                    url=link,
+                    published_utc=pub_utc,
+                )
+            )
+            if len(items) >= max_items:
+                break
+
+        return items
+
+
+class OpenAICompatibleFundamentalLLM:
+    def __init__(
+        self,
+        api_base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: int,
+        temperature: float,
+        max_tokens: int,
+    ):
+        self.api_base_url = str(api_base_url or "https://api.openai.com/v1").rstrip("/")
+        self.api_key = str(api_key or "")
+        self.model = str(model or "gpt-4o-mini")
+        self.timeout_seconds = max(4, int(timeout_seconds))
+        self.temperature = float(max(0.0, min(1.0, temperature)))
+        self.max_tokens = max(120, int(max_tokens))
+
+    def available(self) -> bool:
+        return bool(self.api_key and self.model)
+
+    def analyze(self, symbol: str, asset_class: str, headlines: list[NewsItem]) -> FundamentalDecision | None:
+        if not self.available() or not headlines:
+            return None
+
+        bullets = []
+        for h in headlines:
+            ts = h.published_utc.isoformat() if h.published_utc else "n/a"
+            bullets.append(f"- [{h.source}] {h.title} (published={ts})")
+
+        system_prompt = (
+            "You are a macro/fundamental trading analyst. "
+            "Return ONLY valid JSON with keys: action, confidence, rationale. "
+            "action must be BUY, SELL or HOLD. confidence in [0,1]. "
+            "Be conservative when news is mixed or weak."
+        )
+        user_prompt = (
+            f"Asset symbol: {symbol}\n"
+            f"Asset class: {asset_class}\n"
+            "Recent macro/news headlines:\n"
+            + "\n".join(bullets)
+            + "\nDecide directional action for the next short horizon."
+        )
+
+        url = f"{self.api_base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
+            resp.raise_for_status()
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            obj = json.loads(text) if isinstance(text, str) else {}
+            action = str(obj.get("action", "HOLD")).strip().upper()
+            if action not in {"BUY", "SELL", "HOLD"}:
+                action = "HOLD"
+            conf = max(0.0, min(1.0, _safe_float(obj.get("confidence", 0.5), 0.5)))
+            rationale = str(obj.get("rationale", ""))[:500]
+            return FundamentalDecision(action=action, confidence=conf, rationale=rationale, headlines_used=len(headlines))
+        except Exception:
+            return None
+
+
+class FundamentalNewsLLMEngine:
+    def __init__(self, settings):
+        self.lookback_minutes = max(30, int(getattr(settings, "fundamental_news_lookback_minutes", 240)))
+        self.max_headlines = max(5, int(getattr(settings, "fundamental_max_headlines", 30)))
+        self.max_headlines_per_source = max(2, int(getattr(settings, "fundamental_max_headlines_per_source", 8)))
+        self.use_heuristic_fallback = bool(getattr(settings, "fundamental_use_heuristic_fallback", True))
+
+        raw_sources = str(getattr(settings, "fundamental_news_sources", "")).strip()
+        self.news_sources = [x.strip() for x in raw_sources.split(",") if x.strip()]
+
+        self.provider = RssNewsProvider(
+            timeout_seconds=int(getattr(settings, "fundamental_news_timeout_seconds", 8)),
+            user_agent=str(getattr(settings, "fundamental_user_agent", "EconomicAE/1.0 (+research)")),
+        )
+        fundamental_api_key = str(getattr(settings, "fundamental_llm_api_key", "")).strip()
+        if fundamental_api_key:
+            api_base_url = str(getattr(settings, "fundamental_llm_api_base_url", "https://api.openai.com/v1")).strip()
+            api_key = fundamental_api_key
+            model = str(getattr(settings, "fundamental_llm_model", "gpt-4o-mini")).strip()
+        else:
+            # Gemini fallback path (OpenAI-compatible endpoint)
+            api_base_url = str(getattr(settings, "gemini_openai_base_url", "https://generativelanguage.googleapis.com/v1beta/openai")).strip()
+            api_key = str(getattr(settings, "gemini_api_key", "")).strip()
+            model = str(getattr(settings, "gemini_model", "gemini-3.1-pro")).strip()
+
+        self.llm = OpenAICompatibleFundamentalLLM(
+            api_base_url=api_base_url,
+            api_key=api_key,
+            model=model,
+            timeout_seconds=int(getattr(settings, "fundamental_llm_timeout_seconds", 12)),
+            temperature=float(getattr(settings, "fundamental_llm_temperature", 0.1)),
+            max_tokens=int(getattr(settings, "fundamental_llm_max_tokens", 250)),
+        )
+
+    def analyze(self, symbol: str) -> FundamentalDecision:
+        asset_class = _infer_asset_class(symbol)
+        headlines = self._fetch_recent_headlines()
+
+        llm_out = self.llm.analyze(symbol=symbol, asset_class=asset_class, headlines=headlines)
+        if llm_out is not None:
+            return llm_out
+
+        if self.use_heuristic_fallback:
+            return _heuristic_fundamental_decision(headlines)
+
+        return FundamentalDecision(action="HOLD", confidence=0.0, rationale="No LLM response and fallback disabled.", headlines_used=len(headlines))
+
+    def _fetch_recent_headlines(self) -> list[NewsItem]:
+        if not self.news_sources:
+            return []
+        now_utc = datetime.now(timezone.utc)
+        min_ts = now_utc - timedelta(minutes=self.lookback_minutes)
+        items: list[NewsItem] = []
+
+        for src in self.news_sources:
+            try:
+                rows = self.provider.fetch(src, max_items=self.max_headlines_per_source)
+            except Exception:
+                continue
+            for row in rows:
+                if row.published_utc is not None and row.published_utc < min_ts:
+                    continue
+                items.append(row)
+
+        items.sort(key=lambda x: x.published_utc or datetime(1970, 1, 1, tzinfo=timezone.utc), reverse=True)
+        return items[: self.max_headlines]
+
+
+def _extract_hostname(url: str) -> str:
+    m = re.match(r"^https?://([^/]+)", str(url).strip().lower())
+    return m.group(1) if m else "unknown"
+
+
+def _clean_html(text: str) -> str:
+    s = re.sub(r"<[^>]+>", " ", str(text or ""))
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def _infer_asset_class(symbol: str) -> str:
+    s = str(symbol or "").upper()
+    if len(s) == 6 and s.isalpha():
+        return "forex"
+    if any(x in s for x in ["XAU", "XAG", "WTI", "BRENT", "GOLD", "SILVER", "OIL"]):
+        return "commodity"
+    if any(x in s for x in ["US500", "NAS", "DJ", "DAX", "NIK", "SPX", "NDX", "ES", "NQ", "YM"]):
+        return "index_or_future"
+    if "." in s or "#" in s:
+        return "equity"
+    if len(s) <= 5 and s.isalpha():
+        return "equity"
+    return "multi_asset"
+
+
+def _heuristic_fundamental_decision(headlines: list[NewsItem]) -> FundamentalDecision:
+    if not headlines:
+        return FundamentalDecision(action="HOLD", confidence=0.0, rationale="No recent headlines found.", headlines_used=0)
+
+    text = " ".join((h.title + " " + h.summary) for h in headlines).lower()
+    positive = ["beat", "growth", "surge", "bullish", "rate cut", "strong jobs", "de-escalation", "upgrade"]
+    negative = ["miss", "recession", "selloff", "bearish", "rate hike", "inflation spike", "war", "downgrade"]
+
+    pos = sum(text.count(k) for k in positive)
+    neg = sum(text.count(k) for k in negative)
+
+    total = max(1, pos + neg)
+    edge = abs(pos - neg) / total
+    confidence = max(0.45, min(0.80, 0.45 + edge * 0.35))
+
+    if pos == neg:
+        return FundamentalDecision(action="HOLD", confidence=0.50, rationale="Mixed macro sentiment.", headlines_used=len(headlines))
+    action = "BUY" if pos > neg else "SELL"
+    return FundamentalDecision(action=action, confidence=confidence, rationale=f"Heuristic sentiment pos={pos} neg={neg}.", headlines_used=len(headlines))

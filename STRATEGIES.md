@@ -142,6 +142,25 @@ Salida
   - `proba_buy = clip(0.5 + direction * min(0.49, 0.28 + strength), 0.01, 0.99)` y retorna `TradeDecision`.
 - Observaciones: es una estrategia clásica de ruptura de canal (Donchian/Turtle), con buffer y confirmación de ticks.
 
+**FundamentalLLMStrategy**:
+- Requisitos: `requires_models=False`, `requires_event=False`.
+- Propósito: agente fundamental especializado que combina titulares macro/económicos recientes + análisis por LLM para decidir `BUY`, `SELL` o `HOLD`.
+- Fuentes de noticias:
+  - Usa una lista de RSS configurable en `FUNDAMENTAL_NEWS_SOURCES` (por defecto incluye Investing, Reuters, FXStreet y MarketWatch).
+  - Filtra titulares por ventana temporal `FUNDAMENTAL_NEWS_LOOKBACK_MINUTES` y límite `FUNDAMENTAL_MAX_HEADLINES`.
+- Motor LLM:
+  - Cliente OpenAI-compatible (`FUNDAMENTAL_LLM_API_BASE_URL`, `FUNDAMENTAL_LLM_API_KEY`, `FUNDAMENTAL_LLM_MODEL`).
+  - El prompt obliga salida JSON con `action`, `confidence`, `rationale`.
+  - Si falla el LLM y `FUNDAMENTAL_USE_HEURISTIC_FALLBACK=true`, aplica fallback heurístico de sentimiento por keywords.
+- Multi-activo:
+  - Determina clase de activo en base al símbolo (`forex`, `commodity`, `index_or_future`, `equity`, `multi_asset`) para contextualizar el análisis.
+  - Funciona con el símbolo configurado en `SYMBOL` (por ejemplo EURUSD, XAUUSD, US500, AAPL, etc.).
+- Filtros de ejecución:
+  - Exige `max(policy['decision_threshold'], FUNDAMENTAL_MIN_CONFIDENCE)`.
+  - Aplica `FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS` para evitar reentradas del mismo lado demasiado seguidas.
+- Casos que devuelven `None`:
+  - Acción `HOLD`, confianza insuficiente, cooldown activo o fallos de red/LLM sin señal válida.
+
 ---
 
 `get_strategy(name, settings, policy)`

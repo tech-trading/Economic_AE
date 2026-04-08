@@ -9,6 +9,7 @@ from typing import Any
 
 from src.models import ensemble_predict_proba
 from src.mt5_executor import TradeDecision
+from src.fundamental_agent import FundamentalNewsLLMEngine
 
 
 class Strategy:
@@ -473,6 +474,54 @@ class TurtleAtrBreakoutStrategy(Strategy):
         return TradeDecision(side=side, confidence=confidence, proba_buy=proba_buy)
 
 
+class FundamentalLLMStrategy(Strategy):
+    requires_models: bool = False
+    requires_event: bool = False
+
+    def __init__(self, settings):
+        self.engine = FundamentalNewsLLMEngine(settings=settings)
+        self.signal_cooldown_seconds = max(0, int(getattr(settings, "fundamental_signal_cooldown_seconds", 300)))
+        self.min_confidence = float(np.clip(getattr(settings, "fundamental_min_confidence", 0.60), 0.50, 0.95))
+        self._last_signal_side: str | None = None
+        self._last_signal_ts: pd.Timestamp | None = None
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        now_ts = pd.Timestamp.now(tz="UTC")
+        if ticks is not None and not ticks.empty and "time_utc" in ticks.columns:
+            ts = pd.to_datetime(ticks["time_utc"].iloc[-1], utc=True, errors="coerce")
+            if pd.notna(ts):
+                now_ts = ts
+
+        try:
+            result = self.engine.analyze(symbol=str(getattr(settings, "symbol", "EURUSD")))
+        except Exception:
+            return None
+
+        action = str(getattr(result, "action", "HOLD")).upper()
+        confidence = float(np.clip(getattr(result, "confidence", 0.0), 0.0, 1.0))
+        if action not in {"BUY", "SELL"}:
+            return None
+
+        threshold = max(float(policy.get("decision_threshold", 0.5)), self.min_confidence)
+        if confidence < threshold:
+            return None
+
+        if (
+            self.signal_cooldown_seconds > 0
+            and self._last_signal_side == action
+            and self._last_signal_ts is not None
+        ):
+            elapsed = float((now_ts - self._last_signal_ts).total_seconds())
+            if elapsed < float(self.signal_cooldown_seconds):
+                return None
+
+        direction = 1.0 if action == "BUY" else -1.0
+        proba_buy = float(np.clip(0.5 + direction * min(0.49, 0.10 + 0.40 * confidence), 0.01, 0.99))
+        self._last_signal_side = action
+        self._last_signal_ts = now_ts
+        return TradeDecision(side=action, confidence=confidence, proba_buy=proba_buy)
+
+
 class AgenticHybridStrategy(Strategy):
     requires_models: bool = False
     requires_event: bool = False
@@ -840,6 +889,8 @@ def _build_strategy(name: str, settings, policy: dict) -> Strategy:
             max_extension_atr=float(getattr(settings, "turtle_max_extension_atr", 2.50)),
             signal_cooldown_seconds=int(getattr(settings, "turtle_signal_cooldown_seconds", 240)),
         )
+    if name in {"fundamental", "fundamental_llm", "macro_llm", "news_llm"}:
+        return FundamentalLLMStrategy(settings=settings)
     if name in {"donchian_nylondon", "donchian_session", "donchian_ny_london"}:
         return DonchianBreakoutStrategy(
             lookback_seconds=int(settings.donchian_lookback_seconds),
@@ -882,6 +933,7 @@ def list_supported_strategies() -> list[str]:
         "donchian",
         "donchian_nylondon",
         "turtle_atr",
+        "fundamental_llm",
         "ema_rsi",
         "agentic_hybrid",
     ]

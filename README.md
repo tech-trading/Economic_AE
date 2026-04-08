@@ -196,6 +196,35 @@ This process creates/updates:
 - Set `PAPER_TRADING=true` in `.env` to avoid real orders.
 - Signals are logged into `data/paper_trades.csv`.
 
+## Fundamental LLM Strategy (News-Driven)
+
+- Set `STRATEGY=fundamental_llm` to enable a fundamental agent that reads recent economic headlines (RSS sources) and asks an LLM to decide `BUY`, `SELL`, or `HOLD`.
+- Works with the configured `SYMBOL` across asset classes (forex, commodities, indices/futures, equities), as long as the symbol exists in your broker/MT5.
+- Main env vars:
+	- `FUNDAMENTAL_NEWS_SOURCES`
+	- `FUNDAMENTAL_NEWS_LOOKBACK_MINUTES`
+	- `FUNDAMENTAL_MIN_CONFIDENCE`
+	- `FUNDAMENTAL_LLM_API_BASE_URL`
+	- `FUNDAMENTAL_LLM_API_KEY`
+	- `FUNDAMENTAL_LLM_MODEL`
+
+## Dynamic Symbol Routing by Impact News
+
+- The live trader can route orders to different symbols based on impact event currency and event-name keywords.
+- This allows trading beyond one fixed forex pair (for example, indices, commodities, or other instruments available in MT5).
+- Main env vars:
+	- `IMPACT_SYMBOL_MAP` (currency to candidate symbols)
+	- `IMPACT_KEYWORD_SYMBOL_MAP` (news keyword to candidate symbols)
+	- `IMPACT_SYMBOL_FALLBACK_TO_DEFAULT` (fallback to `SYMBOL` when no route matches)
+
+Example:
+
+```env
+IMPACT_SYMBOL_MAP=USD=EURUSD|US500|XAUUSD;EUR=EURUSD|GER40;GBP=GBPUSD|UK100;JPY=USDJPY|JP225
+IMPACT_KEYWORD_SYMBOL_MAP=oil=XTIUSD|WTI;gold=XAUUSD;nasdaq=NAS100|USTEC;sp500=US500|SPX500
+IMPACT_SYMBOL_FALLBACK_TO_DEFAULT=true
+```
+
 ## Project Layout
 
 - `src/config.py`: environment and runtime settings

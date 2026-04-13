@@ -49,6 +49,7 @@ class Settings:
         "IMPACT_KEYWORD_SYMBOL_MAP",
         "oil=XTIUSD|WTI;crude=XTIUSD|WTI;brent=BRENT;gold=XAUUSD;silver=XAGUSD;gas=XNGUSD|NATGAS;nasdaq=NAS100|USTEC;sp500=US500|SPX500;dow=US30",
     )
+    impact_prefer_non_default: bool = os.getenv("IMPACT_PREFER_NON_DEFAULT", "true").strip().lower() in {"1", "true", "yes", "y"}
     impact_symbol_fallback_to_default: bool = os.getenv("IMPACT_SYMBOL_FALLBACK_TO_DEFAULT", "true").strip().lower() in {"1", "true", "yes", "y"}
 
     # Fundamental + LLM strategy parameters

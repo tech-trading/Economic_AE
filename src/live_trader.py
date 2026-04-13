@@ -283,21 +283,43 @@ class LiveTrader:
                 continue
         return None
 
+    @staticmethod
+    def _prioritize_symbols(candidates: list[str], base_symbol: str, prefer_non_default: bool) -> list[str]:
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for sym in candidates:
+            s = str(sym or "").strip().upper()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            dedup.append(s)
+
+        if not prefer_non_default:
+            return dedup
+
+        base = str(base_symbol or "").strip().upper()
+        non_base = [s for s in dedup if s != base]
+        base_tail = [s for s in dedup if s == base]
+        return non_base + base_tail
+
     def _resolve_symbol_for_event(self, event_row: pd.Series) -> tuple[str, str]:
         base_symbol = str(settings.symbol).upper()
         ccy = str(event_row.get("currency", "")).strip().upper()
         name = str(event_row.get("name", "")).strip().lower()
+        prefer_non_default = bool(getattr(settings, "impact_prefer_non_default", True))
 
         kw_map = self._parse_symbol_map(getattr(settings, "impact_keyword_symbol_map", ""))
         for kw, syms in kw_map.items():
             if kw.lower() in name:
-                pick = self._pick_tradeable_symbol(syms)
+                ranked = self._prioritize_symbols(syms, base_symbol=base_symbol, prefer_non_default=prefer_non_default)
+                pick = self._pick_tradeable_symbol(ranked)
                 if pick:
                     return pick, f"keyword:{kw.lower()}"
 
         ccy_map = self._parse_symbol_map(getattr(settings, "impact_symbol_map", ""))
         if ccy in ccy_map:
-            pick = self._pick_tradeable_symbol(ccy_map[ccy])
+            ranked = self._prioritize_symbols(ccy_map[ccy], base_symbol=base_symbol, prefer_non_default=prefer_non_default)
+            pick = self._pick_tradeable_symbol(ranked)
             if pick:
                 return pick, f"currency:{ccy}"
 

@@ -504,8 +504,14 @@ class FundamentalLLMStrategy(Strategy):
             if pd.notna(ts):
                 now_ts = ts
 
+        symbol_for_analysis = str(getattr(settings, "symbol", "EURUSD"))
+        if isinstance(event_row, pd.Series):
+            maybe_symbol = str(event_row.get("symbol", "")).strip()
+            if maybe_symbol:
+                symbol_for_analysis = maybe_symbol
+
         try:
-            result = self.engine.analyze(symbol=str(getattr(settings, "symbol", "EURUSD")))
+            result = self.engine.analyze(symbol=symbol_for_analysis)
         except Exception:
             return None
 

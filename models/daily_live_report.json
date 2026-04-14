@@ -1,18 +1,58 @@
 {
-  "generated_at_utc": "2026-04-03T14:43:09.134288+00:00",
+  "generated_at_utc": "2026-04-14T01:46:49.470093+00:00",
   "window_hours": 24,
-  "since_utc": "2026-04-02T14:43:09.134288+00:00",
+  "since_utc": "2026-04-13T01:46:49.470093+00:00",
   "activity": {
-    "rows": 32,
+    "rows": 673,
     "actions": {
-      "order_sent_eventless": 15,
-      "calendar_refresh": 9,
-      "eventless_no_decision": 8
+      "eventless_no_decision": 557,
+      "calendar_refresh": 60,
+      "skip_max_open_positions": 35,
+      "skip_eval_max_open_positions_eventless": 12,
+      "calendar_refresh_error": 5,
+      "order_sent_eventless": 3,
+      "order_error_eventless": 1
     }
   },
   "agents": {
-    "rows_with_agent": 0,
-    "by_agent": {}
+    "rows_with_agent": 673,
+    "by_agent": {
+      "agentic_hybrid": {
+        "strategy_class": "AgenticHybridStrategy",
+        "rows": 120,
+        "signal_rows": 0,
+        "signal_rate": 0.0,
+        "max_calls": 33,
+        "max_decisions": 1,
+        "last_side": "None",
+        "last_seen_utc": "2026-04-14T01:46:43.126326+00:00"
+      },
+      "fundamental_llm": {
+        "strategy_class": "FundamentalLLMStrategy",
+        "rows": 553,
+        "signal_rows": 3,
+        "signal_rate": 0.0054249547920434,
+        "max_calls": 154,
+        "max_decisions": 27,
+        "last_side": "None",
+        "last_seen_utc": "2026-04-14T01:23:41.064318+00:00"
+      }
+    }
+  },
+  "mt5_performance": {
+    "available": true,
+    "symbol": "EURUSD",
+    "closed_deals": 2,
+    "wins": 1,
+    "losses": 1,
+    "win_rate": 0.5,
+    "gross_profit": 9.1,
+    "gross_loss": -6.6,
+    "net_profit": 2.5,
+    "profit_factor": 1.378787878787879,
+    "avg_deal_profit": 1.25,
+    "max_drawdown_profit": 6.6,
+    "error": ""
   },
   "paper": {
     "signals": 0,

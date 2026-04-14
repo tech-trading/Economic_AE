@@ -1,0 +1,22 @@
+﻿{
+    "best":  {
+                 "metrics":  {
+                                 "closed_deals":  2,
+                                 "win_rate":  0.5,
+                                 "profit_factor":  1.3787878787878789,
+                                 "net_profit":  2.5,
+                                 "max_drawdown_profit":  6.6
+                             },
+                 "updated_at":  "2026-04-13T20:46:49"
+             },
+    "last":  {
+                 "metrics":  {
+                                 "closed_deals":  2,
+                                 "win_rate":  0.5,
+                                 "profit_factor":  1.3787878787878789,
+                                 "net_profit":  2.5,
+                                 "max_drawdown_profit":  6.6
+                             },
+                 "updated_at":  "2026-04-13T20:46:49"
+             }
+}

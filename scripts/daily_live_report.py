@@ -7,6 +7,9 @@ import re
 
 import pandas as pd
 
+from src.config import settings
+from src.mt5_executor import MT5Executor
+
 
 def _load_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -90,6 +93,81 @@ def _build_agents_summary(activity_recent: pd.DataFrame) -> dict:
     }
 
 
+def _build_mt5_performance_summary(hours: int) -> dict:
+    summary = {
+        "available": False,
+        "symbol": str(settings.symbol),
+        "closed_deals": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0.0,
+        "gross_profit": 0.0,
+        "gross_loss": 0.0,
+        "net_profit": 0.0,
+        "profit_factor": 0.0,
+        "avg_deal_profit": 0.0,
+        "max_drawdown_profit": 0.0,
+        "error": "",
+    }
+
+    execu = MT5Executor()
+    try:
+        execu.initialize()
+        days = max(1, int((int(hours) + 23) // 24))
+        deals = execu.get_recent_deals(symbol=str(settings.symbol), days=days)
+        if deals.empty:
+            summary["available"] = True
+            return summary
+
+        if "entry_label" in deals.columns:
+            deals = deals[deals["entry_label"].astype(str).str.upper() == "CLOSE"].copy()
+        if deals.empty:
+            summary["available"] = True
+            return summary
+
+        deals["profit"] = pd.to_numeric(deals.get("profit", 0.0), errors="coerce").fillna(0.0)
+        deals = deals.sort_values("time_utc") if "time_utc" in deals.columns else deals
+
+        pnl = deals["profit"].astype(float)
+        wins = int((pnl > 0).sum())
+        losses = int((pnl < 0).sum())
+        gross_profit = float(pnl[pnl > 0].sum()) if wins > 0 else 0.0
+        gross_loss_abs = float((-pnl[pnl < 0]).sum()) if losses > 0 else 0.0
+        net_profit = float(pnl.sum())
+        pf = float(gross_profit / gross_loss_abs) if gross_loss_abs > 0 else (999.0 if gross_profit > 0 else 0.0)
+
+        eq = pnl.cumsum()
+        running_max = eq.cummax() if not eq.empty else eq
+        dd = (running_max - eq) if not eq.empty else eq
+        max_dd = float(dd.max()) if not dd.empty else 0.0
+
+        n = int(len(deals))
+        summary.update(
+            {
+                "available": True,
+                "closed_deals": n,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": float(wins / n) if n > 0 else 0.0,
+                "gross_profit": gross_profit,
+                "gross_loss": float(-gross_loss_abs),
+                "net_profit": net_profit,
+                "profit_factor": pf,
+                "avg_deal_profit": float(net_profit / n) if n > 0 else 0.0,
+                "max_drawdown_profit": max_dd,
+            }
+        )
+    except Exception as ex:
+        summary["error"] = str(ex)[:220]
+    finally:
+        try:
+            execu.shutdown()
+        except Exception:
+            pass
+
+    return summary
+
+
 def build_report(hours: int = 24) -> dict:
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
@@ -120,6 +198,7 @@ def build_report(hours: int = 24) -> dict:
         actions = activity_recent["action"].value_counts().to_dict()
 
     agents_summary = _build_agents_summary(activity_recent)
+    mt5_summary = _build_mt5_performance_summary(hours=hours)
 
     paper_summary = {
         "signals": 0,
@@ -146,6 +225,7 @@ def build_report(hours: int = 24) -> dict:
             "actions": actions,
         },
         "agents": agents_summary,
+        "mt5_performance": mt5_summary,
         "paper": paper_summary,
     }
 

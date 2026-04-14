@@ -133,6 +133,14 @@ class Settings:
     agentic_learning_rate: float = float(os.getenv("AGENTIC_LEARNING_RATE", "0.20"))
     agentic_explore_prob: float = float(os.getenv("AGENTIC_EXPLORE_PROB", "0.10"))
     agentic_min_confidence: float = float(os.getenv("AGENTIC_MIN_CONFIDENCE", "0.56"))
+    agentic_min_fallback_confidence: float = float(os.getenv("AGENTIC_MIN_FALLBACK_CONFIDENCE", "0.53"))
+    agentic_decision_threshold: float = float(os.getenv("AGENTIC_DECISION_THRESHOLD", "-1"))
+    agentic_dynamic_threshold: bool = os.getenv("AGENTIC_DYNAMIC_THRESHOLD", "true").strip().lower() in {"1", "true", "yes", "y"}
+    agentic_dynamic_threshold_floor: float = float(os.getenv("AGENTIC_DYNAMIC_THRESHOLD_FLOOR", "0.54"))
+    agentic_dynamic_threshold_cap: float = float(os.getenv("AGENTIC_DYNAMIC_THRESHOLD_CAP", "0.74"))
+    agentic_require_agent_agreement: bool = os.getenv("AGENTIC_REQUIRE_AGENT_AGREEMENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    agentic_max_spread_pips: float = float(os.getenv("AGENTIC_MAX_SPREAD_PIPS", "2.5"))
+    agentic_use_fundamental_fallback: bool = os.getenv("AGENTIC_USE_FUNDAMENTAL_FALLBACK", "false").strip().lower() in {"1", "true", "yes", "y"}
     agentic_reward_horizon_seconds: int = int(os.getenv("AGENTIC_REWARD_HORIZON_SECONDS", "45"))
     agentic_reward_target_pips: float = float(os.getenv("AGENTIC_REWARD_TARGET_PIPS", "1.20"))
     agentic_state_path: str = os.getenv("AGENTIC_STATE_PATH", "models/agentic_state.json")

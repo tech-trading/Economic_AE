@@ -559,6 +559,14 @@ class AgenticHybridStrategy(Strategy):
         self.learning_rate = float(np.clip(getattr(settings, "agentic_learning_rate", 0.20), 0.01, 1.0))
         self.explore_prob = float(np.clip(getattr(settings, "agentic_explore_prob", 0.10), 0.0, 0.5))
         self.min_agent_confidence = float(np.clip(getattr(settings, "agentic_min_confidence", 0.56), 0.50, 0.95))
+        self.min_fallback_confidence = float(np.clip(getattr(settings, "agentic_min_fallback_confidence", 0.53), 0.50, 0.90))
+        self.decision_threshold_override = float(getattr(settings, "agentic_decision_threshold", -1.0))
+        self.dynamic_threshold = bool(getattr(settings, "agentic_dynamic_threshold", True))
+        self.dynamic_threshold_floor = float(np.clip(getattr(settings, "agentic_dynamic_threshold_floor", 0.54), 0.50, 0.90))
+        self.dynamic_threshold_cap = float(np.clip(getattr(settings, "agentic_dynamic_threshold_cap", 0.74), 0.55, 0.98))
+        self.require_agent_agreement = bool(getattr(settings, "agentic_require_agent_agreement", True))
+        self.max_spread_pips = max(0.0, float(getattr(settings, "agentic_max_spread_pips", 2.5)))
+        self.use_fundamental_fallback = bool(getattr(settings, "agentic_use_fundamental_fallback", False))
         self.reward_horizon_seconds = max(10, int(getattr(settings, "agentic_reward_horizon_seconds", 45)))
         self.reward_target_pips = max(0.5, float(getattr(settings, "agentic_reward_target_pips", 1.2)))
         self.signal_cooldown_seconds = max(0, int(getattr(settings, "agentic_signal_cooldown_seconds", 180)))
@@ -573,6 +581,7 @@ class AgenticHybridStrategy(Strategy):
         self.pending_trades: list[dict[str, Any]] = []
         self._last_signal_side: str | None = None
         self._last_signal_ts: pd.Timestamp | None = None
+        self.fundamental_fallback = FundamentalLLMStrategy(settings=settings) if self.use_fundamental_fallback else None
 
         self.ema_agent = EmaRsiTrendStrategy(
             fast_span=int(settings.ema_fast_span),
@@ -685,6 +694,73 @@ class AgenticHybridStrategy(Strategy):
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[0][1]
 
+    def _consensus_decision(self, candidates: list[dict[str, Any]]) -> TradeDecision | None:
+        if not candidates:
+            return None
+
+        by_side = {"BUY": [], "SELL": []}
+        for c in candidates:
+            side = str(c["decision"].side).upper()
+            if side in by_side:
+                by_side[side].append(c)
+
+        buy_count = len(by_side["BUY"])
+        sell_count = len(by_side["SELL"])
+        if buy_count == 0 and sell_count == 0:
+            return None
+
+        if self.require_agent_agreement and max(buy_count, sell_count) < 2:
+            return None
+
+        def side_score(items: list[dict[str, Any]]) -> float:
+            if not items:
+                return 0.0
+            s = 0.0
+            for item in items:
+                k = str(item["agent"])
+                w = max(1e-6, float(self.weights.get(k, 1.0)))
+                c = float(item["decision"].confidence)
+                s += w * c
+            return s
+
+        buy_score = side_score(by_side["BUY"])
+        sell_score = side_score(by_side["SELL"])
+        total = max(1e-9, buy_score + sell_score)
+
+        if buy_score == sell_score:
+            return None
+
+        side = "BUY" if buy_score > sell_score else "SELL"
+        conf = float(np.clip(max(buy_score, sell_score) / total, 0.50, 0.96))
+        proba_buy = float(np.clip(0.5 + ((buy_score - sell_score) / (2.0 * total)), 0.01, 0.99))
+        return TradeDecision(side=side, confidence=conf, proba_buy=proba_buy)
+
+    def _apply_dynamic_threshold(self, base_threshold: float, mid: pd.Series, pip: float, spread_pips: float) -> float:
+        thr = float(base_threshold)
+        if not self.dynamic_threshold or len(mid) < 40:
+            return float(np.clip(thr, self.dynamic_threshold_floor, self.dynamic_threshold_cap))
+
+        returns_pips = (mid.diff().dropna() / max(1e-12, pip)).astype(float)
+        if returns_pips.empty:
+            return float(np.clip(thr, self.dynamic_threshold_floor, self.dynamic_threshold_cap))
+
+        vol_now = float(returns_pips.tail(60).std()) if len(returns_pips) >= 10 else float(returns_pips.std())
+        if not np.isfinite(vol_now):
+            vol_now = 0.0
+
+        if spread_pips > 1.8:
+            thr += 0.03
+        if vol_now < 0.08:
+            thr += 0.03
+        elif vol_now < 0.15:
+            thr += 0.01
+        elif vol_now > 0.45:
+            thr -= 0.02
+        elif vol_now > 0.30:
+            thr -= 0.01
+
+        return float(np.clip(thr, self.dynamic_threshold_floor, self.dynamic_threshold_cap))
+
     def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
         if ticks is None or ticks.empty:
             return None
@@ -705,28 +781,83 @@ class AgenticHybridStrategy(Strategy):
             now_ts = pd.Timestamp.now(tz="UTC")
 
         pip = self._pip_size(getattr(settings, "symbol", "EURUSD"))
+        spread_pips = 0.0
+        if {"bid", "ask"}.issubset(set(df.columns)):
+            try:
+                spread_pips = float((float(df["ask"].iat[-1]) - float(df["bid"].iat[-1])) / max(1e-12, pip))
+            except Exception:
+                spread_pips = 0.0
+
+        if self.max_spread_pips > 0:
+            try:
+                if spread_pips > self.max_spread_pips:
+                    return None
+            except Exception:
+                pass
+
         current_mid = float(mid.iloc[-1])
         self._update_rewards(now_ts, current_mid, pip)
 
         candidates: list[dict[str, Any]] = []
+        soft_candidates: list[dict[str, Any]] = []
         dec_ema = self.ema_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
-        if dec_ema is not None and float(dec_ema.confidence) >= self.min_agent_confidence:
-            candidates.append({"agent": "ema_rsi", "decision": dec_ema})
+        if dec_ema is not None:
+            c_ema = {"agent": "ema_rsi", "decision": dec_ema}
+            if float(dec_ema.confidence) >= self.min_agent_confidence:
+                candidates.append(c_ema)
+            elif float(dec_ema.confidence) >= self.min_fallback_confidence:
+                soft_candidates.append(c_ema)
 
         dec_don = self.donchian_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
-        if dec_don is not None and float(dec_don.confidence) >= self.min_agent_confidence:
-            candidates.append({"agent": "donchian", "decision": dec_don})
+        if dec_don is not None:
+            c_don = {"agent": "donchian", "decision": dec_don}
+            if float(dec_don.confidence) >= self.min_agent_confidence:
+                candidates.append(c_don)
+            elif float(dec_don.confidence) >= self.min_fallback_confidence:
+                soft_candidates.append(c_don)
 
         dec_turtle = self.turtle_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
-        if dec_turtle is not None and float(dec_turtle.confidence) >= self.min_agent_confidence:
-            candidates.append({"agent": "turtle_atr", "decision": dec_turtle})
+        if dec_turtle is not None:
+            c_turtle = {"agent": "turtle_atr", "decision": dec_turtle}
+            if float(dec_turtle.confidence) >= self.min_agent_confidence:
+                candidates.append(c_turtle)
+            elif float(dec_turtle.confidence) >= self.min_fallback_confidence:
+                soft_candidates.append(c_turtle)
+
+        if not candidates:
+            candidates = soft_candidates
+
+        if not candidates and self.fundamental_fallback is not None:
+            try:
+                dec_fund = self.fundamental_fallback.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+            except Exception:
+                dec_fund = None
+            if dec_fund is not None and float(dec_fund.confidence) >= self.min_fallback_confidence:
+                candidates.append({"agent": "fundamental", "decision": dec_fund})
 
         if not candidates:
             return None
 
-        selected = self._choose_agent(candidates)
-        decision = selected["decision"]
-        if float(decision.confidence) < float(self.policy.get("decision_threshold", 0.5)):
+        decision: TradeDecision
+        selected_agent: str
+        consensus = self._consensus_decision(candidates)
+        if consensus is not None:
+            same_side = [c for c in candidates if str(c["decision"].side).upper() == str(consensus.side).upper()]
+            selected = self._choose_agent(same_side if same_side else candidates)
+            selected_agent = str(selected["agent"])
+            conf = max(float(consensus.confidence), float(selected["decision"].confidence))
+            decision = TradeDecision(side=str(consensus.side), confidence=float(np.clip(conf, 0.5, 0.97)), proba_buy=float(consensus.proba_buy))
+        else:
+            selected = self._choose_agent(candidates)
+            selected_agent = str(selected["agent"])
+            decision = selected["decision"]
+
+        if self.decision_threshold_override > 0.0:
+            threshold = float(np.clip(self.decision_threshold_override, 0.50, 0.95))
+        else:
+            threshold = float(self.policy.get("decision_threshold", 0.5))
+        threshold = self._apply_dynamic_threshold(threshold, mid, pip, spread_pips)
+        if float(decision.confidence) < threshold:
             return None
 
         if (
@@ -740,7 +871,7 @@ class AgenticHybridStrategy(Strategy):
 
         self.pending_trades.append(
             {
-                "agent": selected["agent"],
+                "agent": selected_agent,
                 "side": str(decision.side),
                 "entry_mid": current_mid,
                 "due_time": now_ts + pd.Timedelta(seconds=self.reward_horizon_seconds),

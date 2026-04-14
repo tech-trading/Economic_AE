@@ -1217,6 +1217,20 @@ def render_live_status_panel(
             f"actividad={report_obj.get('activity', {}).get('rows', 0)}"
         )
 
+        mt5_perf = report_obj.get("mt5_performance", {}) if isinstance(report_obj, dict) else {}
+        if isinstance(mt5_perf, dict) and bool(mt5_perf.get("available", False)):
+            st.markdown("#### Rentabilidad MT5 (24h)")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Deals cerrados", int(mt5_perf.get("closed_deals", 0)))
+            p2.metric("Win rate", f"{100.0 * float(mt5_perf.get('win_rate', 0.0)):.1f}%")
+            p3.metric("Profit factor", f"{float(mt5_perf.get('profit_factor', 0.0)):.2f}")
+            p4.metric("PnL neto", f"{float(mt5_perf.get('net_profit', 0.0)):.2f}")
+
+            p5, p6, p7 = st.columns(3)
+            p5.metric("Gross profit", f"{float(mt5_perf.get('gross_profit', 0.0)):.2f}")
+            p6.metric("Gross loss", f"{float(mt5_perf.get('gross_loss', 0.0)):.2f}")
+            p7.metric("Max DD (profit)", f"{float(mt5_perf.get('max_drawdown_profit', 0.0)):.2f}")
+
         agents_obj = report_obj.get("agents", {}) if isinstance(report_obj, dict) else {}
         by_agent = agents_obj.get("by_agent", {}) if isinstance(agents_obj, dict) else {}
         if isinstance(by_agent, dict) and by_agent:

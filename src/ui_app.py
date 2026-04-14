@@ -1257,6 +1257,26 @@ def render_live_status_panel(
     now_utc = pd.Timestamp.now(tz="UTC")
     recent = activity[activity["time_utc"] >= (now_utc - pd.Timedelta(hours=24))].copy()
 
+    no_money_actions = {
+        "order_error_no_money",
+        "order_error_no_money_eventless",
+    }
+    recent_no_money = (
+        recent[recent["action"].astype(str).isin(no_money_actions)].copy()
+        if (not recent.empty and "action" in recent.columns)
+        else pd.DataFrame()
+    )
+    if not recent_no_money.empty:
+        last_nm = recent_no_money.iloc[-1]
+        st.error(
+            "Alerta de riesgo/fondos: se detectaron rechazos por balance insuficiente o NO_MONEY en MT5. "
+            "El bot sigue activo y no se detiene, pero no puede abrir nuevas operaciones hasta corregir margen/fondos."
+        )
+        st.caption(
+            f"Último rechazo NO_MONEY: {str(last_nm.get('time_utc', 'N/A'))} | "
+            f"action={str(last_nm.get('action', 'N/A'))} | detail={str(last_nm.get('detail', ''))[:220]}"
+        )
+
     # Semáforo operativo basado en señal de vida reciente y errores de calendario.
     last_ts = activity["time_utc"].iloc[-1]
     mins_since_last = float((now_utc - last_ts).total_seconds() / 60.0)

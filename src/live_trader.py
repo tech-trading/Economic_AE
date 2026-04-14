@@ -101,11 +101,15 @@ class LiveTrader:
                                 elif not self._can_send_order(now, str(decision.side), eventless_id, allow_same_side_override=allow_same_side_override):
                                     pass
                                 else:
-                                    self.executor.send_market_order(target_symbol, decision)
-                                    self._on_order_sent(now, str(decision.side))
-                                    self._active_symbols.add(target_symbol)
-                                    self._log_activity(action="order_sent_eventless", event_id=eventless_id, detail=f"side={decision.side},confidence={decision.confidence:.4f},symbol={target_symbol},route={routing_reason}", symbol=target_symbol)
-                                    print(f"Sending eventless order: {decision}")
+                                    if self._send_live_order_safe(
+                                        now=now,
+                                        event_id=eventless_id,
+                                        symbol=target_symbol,
+                                        decision=decision,
+                                        routing_reason=routing_reason,
+                                        eventless=True,
+                                    ):
+                                        print(f"Sending eventless order: {decision}")
                         else:
                             self._log_activity(action="eventless_no_decision", detail="strategy_returned_none")
                         last_eventless_eval_utc = now
@@ -166,10 +170,14 @@ class LiveTrader:
                                 continue
 
                             print(f"Sending order for event {event_id} [{target_symbol}] route={routing_reason}: {decision}")
-                            self.executor.send_market_order(target_symbol, decision)
-                            self._on_order_sent(now, str(decision.side))
-                            self._active_symbols.add(target_symbol)
-                            self._log_activity(action="order_sent", event_id=event_id, detail=f"side={decision.side},confidence={decision.confidence:.4f},symbol={target_symbol},route={routing_reason}", symbol=target_symbol)
+                            self._send_live_order_safe(
+                                now=now,
+                                event_id=event_id,
+                                symbol=target_symbol,
+                                decision=decision,
+                                routing_reason=routing_reason,
+                                eventless=False,
+                            )
 
                         already_traded_event_ids.add(event_id)
                     else:
@@ -345,6 +353,58 @@ class LiveTrader:
             return None
         aux = aux.sort_values(["date_utc"], ascending=True)
         return aux.iloc[0]
+
+    @staticmethod
+    def _is_no_money_error(ex: Exception) -> bool:
+        msg = str(ex).lower()
+        hints = [
+            "retcode=10019",
+            "no money",
+            "not enough money",
+            "trade_retcod",
+            "insufficient",
+            "balance",
+        ]
+        return any(h in msg for h in hints)
+
+    def _send_live_order_safe(
+        self,
+        *,
+        now: datetime,
+        event_id: str,
+        symbol: str,
+        decision: TradeDecision,
+        routing_reason: str,
+        eventless: bool,
+    ) -> bool:
+        action_ok = "order_sent_eventless" if eventless else "order_sent"
+        action_fail_default = "order_error_eventless" if eventless else "order_error"
+        action_fail_no_money = "order_error_no_money_eventless" if eventless else "order_error_no_money"
+
+        try:
+            self.executor.send_market_order(symbol, decision)
+            self._on_order_sent(now, str(decision.side))
+            self._active_symbols.add(symbol)
+            self._log_activity(
+                action=action_ok,
+                event_id=event_id,
+                detail=(
+                    f"side={decision.side},confidence={decision.confidence:.4f},"
+                    f"symbol={symbol},route={routing_reason}"
+                ),
+                symbol=symbol,
+            )
+            return True
+        except Exception as ex:
+            is_no_money = self._is_no_money_error(ex)
+            action_fail = action_fail_no_money if is_no_money else action_fail_default
+            detail = (
+                f"side={decision.side},confidence={decision.confidence:.4f},"
+                f"symbol={symbol},route={routing_reason},error={str(ex)[:240]}"
+            )
+            self._log_activity(action=action_fail, event_id=event_id, detail=detail, symbol=symbol)
+            print(f"Order send failed ({action_fail}) event={event_id} symbol={symbol}: {ex}")
+            return False
 
     def _prune_recent_orders(self, now: datetime) -> None:
         while self._recent_order_times and (now - self._recent_order_times[0]).total_seconds() > 3600:

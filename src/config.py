@@ -157,6 +157,7 @@ class Settings:
     live_calendar_refresh_seconds: int = int(os.getenv("LIVE_CALENDAR_REFRESH_SECONDS", "120"))
     live_loop_sleep_seconds: int = int(os.getenv("LIVE_LOOP_SLEEP_SECONDS", "1"))
     eventless_eval_seconds: int = int(os.getenv("EVENTLESS_EVAL_SECONDS", "20"))
+    eventless_skip_eval_when_max_open: bool = os.getenv("EVENTLESS_SKIP_EVAL_WHEN_MAX_OPEN", "true").strip().lower() in {"1", "true", "yes", "y"}
     live_activity_csv: str = os.getenv("LIVE_ACTIVITY_CSV", "data/live_activity.csv")
 
     # --- Risk / exits (ATR-based preferred) ---

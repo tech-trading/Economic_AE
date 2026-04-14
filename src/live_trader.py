@@ -79,6 +79,23 @@ class LiveTrader:
                         )
                         context_event = impact_event if impact_event is not None else pseudo_event
                         target_symbol, routing_reason = self._resolve_symbol_for_event(context_event)
+
+                        if bool(getattr(settings, "eventless_skip_eval_when_max_open", True)):
+                            open_positions = self.executor.count_open_positions(target_symbol)
+                            if open_positions >= settings.max_open_positions:
+                                self._log_activity(
+                                    action="skip_eval_max_open_positions_eventless",
+                                    event_id=str(context_event.get("event_id", pseudo_event["event_id"])),
+                                    detail=(
+                                        f"open_positions={open_positions},"
+                                        f"symbol={target_symbol},route={routing_reason}"
+                                    ),
+                                    symbol=target_symbol,
+                                )
+                                last_eventless_eval_utc = now
+                                time.sleep(max(1, settings.live_loop_sleep_seconds))
+                                continue
+
                         decision = self._build_decision(context_event, target_symbol)
                         if decision is not None:
                             eventless_id = str(context_event.get("event_id", pseudo_event["event_id"]))

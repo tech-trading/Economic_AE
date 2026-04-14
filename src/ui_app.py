@@ -90,9 +90,6 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
             --bg-b: {bg_b};
             --ink: {ink};
             --muted: {muted};
-            --teal: #0f766e;
-            --teal-soft: #d8f3ef;
-            --orange: #e76f51;
             --card: {card};
             --line: {line};
             --shadow: {shadow};

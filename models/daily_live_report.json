@@ -1,37 +1,38 @@
 {
-  "generated_at_utc": "2026-04-14T01:46:49.470093+00:00",
+  "generated_at_utc": "2026-04-14T11:40:24.416808+00:00",
   "window_hours": 24,
-  "since_utc": "2026-04-13T01:46:49.470093+00:00",
+  "since_utc": "2026-04-13T11:40:24.416808+00:00",
   "activity": {
-    "rows": 673,
+    "rows": 3989,
     "actions": {
-      "eventless_no_decision": 557,
-      "calendar_refresh": 60,
+      "skip_eval_max_open_positions_eventless": 2587,
+      "eventless_no_decision": 988,
+      "calendar_refresh": 345,
       "skip_max_open_positions": 35,
-      "skip_eval_max_open_positions_eventless": 12,
-      "calendar_refresh_error": 5,
-      "order_sent_eventless": 3,
-      "order_error_eventless": 1
+      "order_sent_eventless": 16,
+      "calendar_refresh_error": 16,
+      "order_error_eventless": 1,
+      "skip_same_side_cooldown": 1
     }
   },
   "agents": {
-    "rows_with_agent": 673,
+    "rows_with_agent": 3989,
     "by_agent": {
       "agentic_hybrid": {
         "strategy_class": "AgenticHybridStrategy",
-        "rows": 120,
-        "signal_rows": 0,
-        "signal_rate": 0.0,
-        "max_calls": 33,
-        "max_decisions": 1,
-        "last_side": "None",
-        "last_seen_utc": "2026-04-14T01:46:43.126326+00:00"
+        "rows": 3437,
+        "signal_rows": 13,
+        "signal_rate": 0.003782368344486471,
+        "max_calls": 414,
+        "max_decisions": 6,
+        "last_side": "BUY",
+        "last_seen_utc": "2026-04-14T11:40:20.049009+00:00"
       },
       "fundamental_llm": {
         "strategy_class": "FundamentalLLMStrategy",
-        "rows": 553,
+        "rows": 552,
         "signal_rows": 3,
-        "signal_rate": 0.0054249547920434,
+        "signal_rate": 0.005434782608695652,
         "max_calls": 154,
         "max_decisions": 27,
         "last_side": "None",
@@ -42,17 +43,43 @@
   "mt5_performance": {
     "available": true,
     "symbol": "EURUSD",
-    "closed_deals": 2,
-    "wins": 1,
-    "losses": 1,
-    "win_rate": 0.5,
-    "gross_profit": 9.1,
-    "gross_loss": -6.6,
-    "net_profit": 2.5,
-    "profit_factor": 1.378787878787879,
-    "avg_deal_profit": 1.25,
-    "max_drawdown_profit": 6.6,
+    "total_deals": 21,
+    "open_deals": 11,
+    "close_deals": 10,
+    "reverse_deals": 0,
+    "close_by_deals": 0,
+    "closed_deals": 10,
+    "wins": 3,
+    "losses": 7,
+    "win_rate": 0.3,
+    "gross_profit": 12.7,
+    "gross_loss": -59.300000000000004,
+    "net_profit": -46.60000000000001,
+    "profit_factor": 0.2141652613827993,
+    "avg_deal_profit": -4.660000000000001,
+    "max_drawdown_profit": 58.10000000000001,
     "error": ""
+  },
+  "performance_semaphore": {
+    "state": "ROJO",
+    "message": "Rendimiento degradado: conviene mantener rollback activo y no subir riesgo.",
+    "reasons": [
+      "pf_below_1",
+      "net_negative",
+      "dd_high",
+      "win_rate_low"
+    ],
+    "degraded_vs_best": false,
+    "thresholds": {
+      "min_deals": 6,
+      "green_pf": 1.2,
+      "yellow_pf": 1.0,
+      "green_win_rate": 0.5,
+      "yellow_win_rate": 0.45,
+      "green_dd": 6.0,
+      "yellow_dd": 9.0
+    },
+    "best_reference": null
   },
   "paper": {
     "signals": 0,

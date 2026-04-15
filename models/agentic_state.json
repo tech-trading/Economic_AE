@@ -1,14 +1,12 @@
 {
   "weights": {
-    "ema_rsi": 4.633609917734103,
+    "ema_rsi": 4.697912465240489,
     "donchian": 0.7105197978535823,
-    "turtle_atr": 0.2,
-    "fundamental": 1.159890171123547
+    "turtle_atr": 0.2
   },
   "counts": {
-    "ema_rsi": 376,
+    "ema_rsi": 377,
     "donchian": 1058,
-    "turtle_atr": 14,
-    "fundamental": 3
+    "turtle_atr": 14
   }
 }

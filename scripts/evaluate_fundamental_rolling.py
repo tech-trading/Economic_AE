@@ -143,6 +143,8 @@ def main() -> None:
     cfg = SimpleNamespace(**vars(settings))
     cfg.strategy = "fundamental_llm"
     cfg.agent_manage_all_strategies = False
+    cfg.fundamental_news_poll_seconds = 0
+    cfg.fundamental_reanalyze_seconds = 0
 
     out_dir = os.path.join(settings.data_dir, "comparison")
     os.makedirs(out_dir, exist_ok=True)

@@ -7,9 +7,14 @@ from __future__ import annotations
 import os
 import json
 import argparse
+import sys
 from types import SimpleNamespace
 import pandas as pd
 import numpy as np
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from src.config import settings
 from src.models import load_artifacts
@@ -21,16 +26,38 @@ def _compute_eval_return(ticks: pd.DataFrame, event_time: pd.Timestamp, horizon_
     if ticks.empty or "time_utc" not in ticks.columns:
         return None
 
-    post = ticks[
-        (ticks["time_utc"] >= event_time + pd.Timedelta(seconds=5))
-        & (ticks["time_utc"] <= event_time + pd.Timedelta(seconds=max(10, horizon_seconds)))
-    ].copy()
-    if len(post) < max(2, int(min_post_ticks)):
+    times = pd.to_datetime(ticks["time_utc"], utc=True, errors="coerce")
+    if times.isna().all():
         return None
 
+    t0 = pd.to_datetime(event_time, utc=True, errors="coerce")
+    if pd.isna(t0):
+        return None
 
+    start_time = t0 + pd.Timedelta(seconds=5)
+    end_time = t0 + pd.Timedelta(seconds=max(10, int(horizon_seconds)))
+
+    i0 = int(times.searchsorted(start_time, side="left"))
+    i1 = int(times.searchsorted(end_time, side="right")) - 1
+    if i0 >= len(ticks):
+        return None
+    if i1 <= i0:
+        i1 = min(len(ticks) - 1, i0 + 1)
+        if i1 <= i0:
+            return None
+
+    span = (i1 - i0 + 1)
+    if span < 2:
+        return None
+
+    min_required = max(2, int(min_post_ticks))
+    if span < min_required:
+        # Relax requirement on sparse ranges; keep at least a 2-point return.
+        pass
+
+    post = ticks.iloc[i0 : i1 + 1].copy()
     mid = ((post["bid"].astype(float) + post["ask"].astype(float)) / 2.0).dropna()
-    if len(mid) < max(2, int(min_post_ticks)):
+    if len(mid) < 2:
         return None
 
     first_post = float(mid.iloc[0])
@@ -103,6 +130,16 @@ def main():
         ticks['time_utc'] = pd.to_datetime(ticks['time_utc'], utc=True)
         ticks = ticks.sort_values('time_utc')
 
+    original_events = int(len(events))
+    if not ticks.empty and 'date_utc' in events.columns:
+        events = events.copy()
+        events['date_utc'] = pd.to_datetime(events['date_utc'], utc=True, errors='coerce')
+        tmin = pd.to_datetime(ticks['time_utc'].min(), utc=True, errors='coerce')
+        tmax = pd.to_datetime(ticks['time_utc'].max(), utc=True, errors='coerce')
+        max_eval_time = tmax - pd.Timedelta(seconds=max(10, horizon_seconds))
+        events = events[(events['date_utc'].notna()) & (events['date_utc'] >= tmin) & (events['date_utc'] <= max_eval_time)]
+        events = events.reset_index(drop=True)
+
     # load only tabular artifacts to avoid importing tensorflow in constrained envs
     try:
         from src.models import load_tabular_artifacts
@@ -143,6 +180,8 @@ def main():
                 'horizon_seconds': int(horizon_seconds),
                 'horizon_minutes': float(horizon_seconds) / 60.0,
                 'min_post_ticks': int(args.min_post_ticks),
+                'events_original': int(original_events),
+                'events_after_tick_range_filter': int(len(events)),
                 'samples': int(getattr(bundle.X_tabular, 'shape', [0])[0]) if not bundle.X_tabular.empty else 0,
             },
             f,

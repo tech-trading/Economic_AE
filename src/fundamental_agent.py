@@ -155,7 +155,13 @@ class OpenAICompatibleFundamentalLLM:
     def available(self) -> bool:
         return bool(self.api_key and self.model)
 
-    def analyze(self, symbol: str, asset_class: str, headlines: list[NewsItem]) -> FundamentalDecision | None:
+    def analyze(
+        self,
+        symbol: str,
+        asset_class: str,
+        headlines: list[NewsItem],
+        event_context: dict[str, Any] | None = None,
+    ) -> FundamentalDecision | None:
         if not self.available() or not headlines:
             return None
 
@@ -170,9 +176,23 @@ class OpenAICompatibleFundamentalLLM:
             "action must be BUY, SELL or HOLD. confidence in [0,1]. "
             "Be conservative when news is mixed or weak."
         )
+        event_name = str((event_context or {}).get("name", "")).strip()
+        event_currency = str((event_context or {}).get("currency", "")).strip().upper()
+        event_importance = str((event_context or {}).get("importance", "")).strip()
+        event_block = ""
+        if event_name or event_currency or event_importance:
+            event_block = (
+                "Primary scheduled event context:\n"
+                f"- name: {event_name or 'n/a'}\n"
+                f"- currency: {event_currency or 'n/a'}\n"
+                f"- importance: {event_importance or 'n/a'}\n"
+            )
+
         user_prompt = (
             f"Asset symbol: {symbol}\n"
             f"Asset class: {asset_class}\n"
+            + event_block
+            +
             "Recent macro/news headlines:\n"
             + "\n".join(bullets)
             + "\nDecide directional action for the next short horizon."
@@ -215,11 +235,11 @@ class OpenAICompatibleFundamentalLLM:
 class FundamentalNewsLLMEngine:
     def __init__(self, settings):
         self.lookback_minutes = max(30, int(getattr(settings, "fundamental_news_lookback_minutes", 240)))
-        self.news_poll_seconds = max(5, int(getattr(settings, "fundamental_news_poll_seconds", 20)))
+        self.news_poll_seconds = max(0, int(getattr(settings, "fundamental_news_poll_seconds", 20)))
         self.max_headlines = max(5, int(getattr(settings, "fundamental_max_headlines", 30)))
         self.max_headlines_per_source = max(2, int(getattr(settings, "fundamental_max_headlines_per_source", 8)))
         self.use_heuristic_fallback = bool(getattr(settings, "fundamental_use_heuristic_fallback", True))
-        self.reanalyze_seconds = max(5, int(getattr(settings, "fundamental_reanalyze_seconds", 15)))
+        self.reanalyze_seconds = max(0, int(getattr(settings, "fundamental_reanalyze_seconds", 15)))
 
         raw_sources = str(getattr(settings, "fundamental_news_sources", "")).strip()
         self.news_sources = [x.strip() for x in raw_sources.split(",") if x.strip()]
@@ -252,8 +272,9 @@ class FundamentalNewsLLMEngine:
         self._last_analysis_utc: datetime | None = None
         self._last_headlines: list[NewsItem] = []
         self._last_headlines_fetch_utc: datetime | None = None
+        self._stale_decision_max_age_seconds: int = 180
 
-    def analyze(self, symbol: str) -> FundamentalDecision:
+    def analyze(self, symbol: str, event_context: dict[str, Any] | None = None) -> FundamentalDecision:
         asset_class = _infer_asset_class(symbol)
         headlines = self._get_recent_headlines_cached()
         signature = self._headlines_signature(headlines)
@@ -277,7 +298,12 @@ class FundamentalNewsLLMEngine:
                 news_changed=False,
             )
 
-        llm_out = self.llm.analyze(symbol=symbol, asset_class=asset_class, headlines=headlines)
+        llm_out = self.llm.analyze(
+            symbol=symbol,
+            asset_class=asset_class,
+            headlines=headlines,
+            event_context=event_context,
+        )
         if llm_out is not None:
             decision = FundamentalDecision(
                 action=llm_out.action,
@@ -294,7 +320,21 @@ class FundamentalNewsLLMEngine:
             return decision
 
         if self.use_heuristic_fallback:
-            heuristic = _heuristic_fundamental_decision(headlines)
+            if not headlines and self._last_decision is not None and self._last_analysis_utc is not None:
+                age = float((now_utc - self._last_analysis_utc).total_seconds())
+                if age <= float(self._stale_decision_max_age_seconds):
+                    d = self._last_decision
+                    return FundamentalDecision(
+                        action=d.action,
+                        confidence=float(max(0.0, min(1.0, d.confidence * 0.9))),
+                        rationale=(d.rationale or "")[:450] + " | stale_decision_fallback",
+                        headlines_used=len(headlines),
+                        analysis_source="stale_cache",
+                        news_signature=signature,
+                        news_changed=False,
+                    )
+
+            heuristic = _heuristic_fundamental_decision(headlines, symbol=symbol, event_context=event_context)
             decision = FundamentalDecision(
                 action=heuristic.action,
                 confidence=heuristic.confidence,
@@ -325,13 +365,17 @@ class FundamentalNewsLLMEngine:
 
     def _get_recent_headlines_cached(self) -> list[NewsItem]:
         now_utc = datetime.now(timezone.utc)
-        if self._last_headlines_fetch_utc is not None:
+        if self.news_poll_seconds > 0 and self._last_headlines_fetch_utc is not None:
             elapsed = float((now_utc - self._last_headlines_fetch_utc).total_seconds())
             if elapsed < float(self.news_poll_seconds):
                 return list(self._last_headlines)
 
         headlines = self._fetch_recent_headlines()
-        self._last_headlines = list(headlines)
+        if headlines:
+            self._last_headlines = list(headlines)
+        elif self._last_headlines:
+            # Keep the most recent successful snapshot when feeds fail transiently.
+            headlines = list(self._last_headlines)
         self._last_headlines_fetch_utc = now_utc
         return headlines
 
@@ -393,8 +437,34 @@ def _infer_asset_class(symbol: str) -> str:
     return "multi_asset"
 
 
-def _heuristic_fundamental_decision(headlines: list[NewsItem]) -> FundamentalDecision:
+def _event_currency_prior(symbol: str, event_context: dict[str, Any] | None) -> str | None:
+    s = str(symbol or "").upper().strip()
+    ccy = str((event_context or {}).get("currency", "")).upper().strip()
+    if len(s) == 6 and s.isalpha() and len(ccy) == 3:
+        base = s[:3]
+        quote = s[3:]
+        if ccy == base:
+            return "BUY"
+        if ccy == quote:
+            return "SELL"
+    return None
+
+
+def _heuristic_fundamental_decision(
+    headlines: list[NewsItem],
+    symbol: str = "",
+    event_context: dict[str, Any] | None = None,
+) -> FundamentalDecision:
+    prior = _event_currency_prior(symbol=symbol, event_context=event_context)
+
     if not headlines:
+        if prior in {"BUY", "SELL"}:
+            return FundamentalDecision(
+                action=prior,
+                confidence=0.62,
+                rationale=f"No headlines; event-currency prior={prior}.",
+                headlines_used=0,
+            )
         return FundamentalDecision(action="HOLD", confidence=0.0, rationale="No recent headlines found.", headlines_used=0)
 
     text = " ".join((h.title + " " + h.summary) for h in headlines).lower()
@@ -409,6 +479,13 @@ def _heuristic_fundamental_decision(headlines: list[NewsItem]) -> FundamentalDec
     confidence = max(0.45, min(0.80, 0.45 + edge * 0.35))
 
     if pos == neg:
+        if prior in {"BUY", "SELL"}:
+            return FundamentalDecision(
+                action=prior,
+                confidence=0.60,
+                rationale=f"Mixed sentiment; event-currency prior={prior}.",
+                headlines_used=len(headlines),
+            )
         return FundamentalDecision(action="HOLD", confidence=0.50, rationale="Mixed macro sentiment.", headlines_used=len(headlines))
     action = "BUY" if pos > neg else "SELL"
     return FundamentalDecision(action=action, confidence=confidence, rationale=f"Heuristic sentiment pos={pos} neg={neg}.", headlines_used=len(headlines))

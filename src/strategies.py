@@ -510,8 +510,16 @@ class FundamentalLLMStrategy(Strategy):
             if maybe_symbol:
                 symbol_for_analysis = maybe_symbol
 
+        event_ctx: dict[str, Any] = {}
+        if isinstance(event_row, pd.Series):
+            event_ctx = {
+                "name": str(event_row.get("name", "")),
+                "currency": str(event_row.get("currency", "")),
+                "importance": event_row.get("importance", ""),
+            }
+
         try:
-            result = self.engine.analyze(symbol=symbol_for_analysis)
+            result = self.engine.analyze(symbol=symbol_for_analysis, event_context=event_ctx)
         except Exception:
             return None
 

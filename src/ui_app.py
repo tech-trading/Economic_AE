@@ -90,9 +90,6 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
             --bg-b: {bg_b};
             --ink: {ink};
             --muted: {muted};
-            --teal: #0f766e;
-            --teal-soft: #d8f3ef;
-            --orange: #e76f51;
             --card: {card};
             --line: {line};
             --shadow: {shadow};
@@ -405,6 +402,14 @@ def load_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def parse_datetime_utc(values: pd.Series | list | np.ndarray) -> pd.Series:
+    """Parse datetimes to UTC using explicit formats to avoid inference warnings."""
+    try:
+        return pd.to_datetime(values, utc=True, errors="coerce", format="ISO8601")
+    except Exception:
+        return pd.to_datetime(values, utc=True, errors="coerce")
+
+
 def load_live_mt5_trades(symbol: str, history_days: int) -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
     executor = MT5Executor()
     try:
@@ -432,7 +437,7 @@ def build_monitor_source(environment: str, history_days: int) -> tuple[pd.DataFr
 
         if not deals_live.empty:
             deals = deals_live.copy()
-            deals["time_utc"] = pd.to_datetime(deals.get("time_utc"), utc=True, errors="coerce")
+            deals["time_utc"] = parse_datetime_utc(deals.get("time_utc"))
             deals["side"] = deals.get("side", "").astype(str).str.upper()
             deals = deals[deals["side"].isin(["BUY", "SELL"])].copy()
             if "entry_label" not in deals.columns:
@@ -451,7 +456,7 @@ def build_monitor_source(environment: str, history_days: int) -> tuple[pd.DataFr
 
         if not open_live.empty:
             opens = open_live.copy()
-            opens["time_utc"] = pd.to_datetime(opens.get("time_utc"), utc=True, errors="coerce")
+            opens["time_utc"] = parse_datetime_utc(opens.get("time_utc"))
             opens["side"] = opens.get("side", "").astype(str).str.upper()
             opens = opens[opens["side"].isin(["BUY", "SELL"])].copy()
             opens["entry_label"] = "OPEN_POSITION"
@@ -555,7 +560,7 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
-    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent"}:
+    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "turtle_atr", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "fundamental_llm", "fundamental", "macro_llm", "news_llm"}:
         return {"status": "eventless_strategy", "path": str(events_csv_path)}
 
     if not events_csv_path.exists():
@@ -570,7 +575,7 @@ def get_next_trigger_info(
     if not dt_col:
         return {"status": "missing_datetime_col", "path": str(events_csv_path), "columns": list(events.columns)}
 
-    events[dt_col] = pd.to_datetime(events[dt_col], utc=True, errors="coerce")
+    events[dt_col] = parse_datetime_utc(events[dt_col])
     events = events.dropna(subset=[dt_col]).sort_values(dt_col)
     now_utc = pd.Timestamp.now(tz="UTC")
     upcoming = events[events[dt_col] > now_utc].copy()
@@ -591,7 +596,7 @@ def get_next_trigger_info(
         }
 
     next_event = upcoming.iloc[0]
-    event_time_utc = pd.to_datetime(next_event[dt_col], utc=True, errors="coerce")
+    event_time_utc = parse_datetime_utc(next_event[dt_col])
     if pd.isna(event_time_utc):
         return {"status": "invalid_event_time", "path": str(events_csv_path)}
     trigger_utc = event_time_utc - pd.Timedelta(seconds=int(seconds_before_event))
@@ -751,7 +756,7 @@ def render_paper_trade_charts(
         st.warning("El archivo de registros no tiene todas las columnas requeridas: time_utc, side, confidence")
         return
 
-    paper["time_utc"] = pd.to_datetime(paper["time_utc"], utc=True, errors="coerce")
+    paper["time_utc"] = parse_datetime_utc(paper["time_utc"])
     paper = paper.dropna(subset=["time_utc"]).sort_values("time_utc")
     if paper.empty:
         st.info("Los registros no tienen timestamps válidos.")
@@ -885,7 +890,7 @@ def render_paper_trade_charts(
 
     rec_df = filtered.copy()
     ref_col = "event_time_utc" if "event_time_utc" in rec_df.columns else "time_utc"
-    rec_df[ref_col] = pd.to_datetime(rec_df[ref_col], utc=True, errors="coerce")
+    rec_df[ref_col] = parse_datetime_utc(rec_df[ref_col])
     rec_df = rec_df.dropna(subset=[ref_col])
     now_utc = pd.Timestamp.now(tz="UTC")
     if time_focus == "Solo hoy":
@@ -1039,10 +1044,10 @@ def enrich_trade_history_with_results(trades: pd.DataFrame, market_path: Path) -
         return trades
 
     out = trades.copy()
-    out["time_utc"] = pd.to_datetime(out.get("time_utc"), utc=True, errors="coerce")
+    out["time_utc"] = parse_datetime_utc(out.get("time_utc"))
 
     event_col = "event_time_utc" if "event_time_utc" in out.columns else "time_utc"
-    out[event_col] = pd.to_datetime(out.get(event_col), utc=True, errors="coerce")
+    out[event_col] = parse_datetime_utc(out.get(event_col))
 
     out["side_upper"] = out.get("side", "").astype(str).str.upper()
     out["signal"] = out["side_upper"].map({"BUY": 1, "SELL": -1}).fillna(0).astype(int)
@@ -1057,7 +1062,7 @@ def enrich_trade_history_with_results(trades: pd.DataFrame, market_path: Path) -
         return out
 
     market = market.copy()
-    market["time_utc"] = pd.to_datetime(market["time_utc"], utc=True, errors="coerce")
+    market["time_utc"] = parse_datetime_utc(market["time_utc"])
     market = market.dropna(subset=["time_utc"]).sort_values("time_utc")
     market["mid"] = _get_mid_column(market)
     if {"bid", "ask"}.issubset(set(market.columns)):
@@ -1157,8 +1162,12 @@ def render_live_status_panel(
 
     activity = load_csv(live_activity_path)
     if not activity.empty and "time_utc" in activity.columns:
-        activity["time_utc"] = pd.to_datetime(activity["time_utc"], utc=True, errors="coerce")
+        activity["time_utc"] = parse_datetime_utc(activity["time_utc"])
         activity = activity.dropna(subset=["time_utc"]).sort_values("time_utc")
+
+    activity_live = activity.copy()
+    if (not activity_live.empty) and ("mode" in activity_live.columns):
+        activity_live = activity_live[activity_live["mode"].astype(str).str.upper() == "LIVE"].copy()
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Archivo actividad", "OK" if live_activity_path.exists() else "Missing")
@@ -1205,12 +1214,14 @@ def render_live_status_panel(
     else:
         st.warning(f"No se pudo calcular el próximo trigger: {next_trigger.get('error', 'error desconocido')}")
 
-    if not activity.empty:
-        last_row = activity.iloc[-1]
+    if not activity_live.empty:
+        last_row = activity_live.iloc[-1]
         st.caption(
             f"Última acción: {str(last_row.get('action', 'N/A'))} | "
             f"Último evento UTC: {str(last_row.get('time_utc', 'N/A'))}"
         )
+    elif not activity.empty:
+        st.caption("No hay actividad LIVE reciente en el archivo (solo registros PAPER).")
     else:
         st.caption("Última acción: N/A | Último evento UTC: N/A")
 
@@ -1220,17 +1231,103 @@ def render_live_status_panel(
             f"actividad={report_obj.get('activity', {}).get('rows', 0)}"
         )
 
-    if activity.empty:
+        agents_obj = report_obj.get("agents", {}) if isinstance(report_obj, dict) else {}
+        by_agent = agents_obj.get("by_agent", {}) if isinstance(agents_obj, dict) else {}
+        if isinstance(by_agent, dict) and by_agent:
+            st.markdown("#### Resumen por agente (24h)")
+            rows = []
+            for agent_name, obj in by_agent.items():
+                if not isinstance(obj, dict):
+                    continue
+                rows.append(
+                    {
+                        "agent": str(agent_name),
+                        "strategy_class": str(obj.get("strategy_class", "")),
+                        "rows": int(obj.get("rows", 0)),
+                        "signal_rows": int(obj.get("signal_rows", 0)),
+                        "signal_rate": float(obj.get("signal_rate", 0.0)),
+                        "max_calls": int(obj.get("max_calls", 0)),
+                        "max_decisions": int(obj.get("max_decisions", 0)),
+                        "last_side": str(obj.get("last_side", "")),
+                        "last_seen_utc": str(obj.get("last_seen_utc", "")),
+                    }
+                )
+
+            if rows:
+                df_agents = pd.DataFrame(rows).sort_values(["signal_rows", "rows"], ascending=False)
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Agentes activos 24h", int(len(df_agents)))
+                a2.metric("Señales agente 24h", int(df_agents["signal_rows"].sum()))
+                a3.metric("Tasa señal prom.", f"{float(df_agents['signal_rate'].mean()):.2%}")
+                st.dataframe(df_agents, use_container_width=True)
+
+    if activity_live.empty:
         st.info("No hay actividad LIVE registrada todavía.")
         return
 
     now_utc = pd.Timestamp.now(tz="UTC")
-    recent = activity[activity["time_utc"] >= (now_utc - pd.Timedelta(hours=24))].copy()
+    recent = activity_live[activity_live["time_utc"] >= (now_utc - pd.Timedelta(hours=24))].copy()
+    env_local = load_env()
+    no_money_alert_minutes = parse_int(env_local.get("UI_NO_MONEY_ALERT_MINUTES"), 60)
+    heartbeat_minutes = parse_float(env_local.get("UI_LIVE_HEARTBEAT_MINUTES"), 15.0)
+
+    no_money_actions = {
+        "order_error_no_money",
+        "order_error_no_money_eventless",
+    }
+    success_actions = {
+        "order_sent",
+        "order_sent_eventless",
+    }
+    recent_no_money = (
+        recent[recent["action"].astype(str).isin(no_money_actions)].copy()
+        if (not recent.empty and "action" in recent.columns)
+        else pd.DataFrame()
+    )
+    mins_since_no_money: float | None = None
+    if not recent_no_money.empty:
+        last_nm = recent_no_money.iloc[-1]
+        parsed_nm_ts = parse_datetime_utc([last_nm.get("time_utc")])
+        last_nm_ts = parsed_nm_ts[0] if len(parsed_nm_ts) > 0 else pd.NaT
+        has_activity_after_no_money = False
+        if pd.notna(last_nm_ts):
+            mins_since_no_money = float((now_utc - last_nm_ts).total_seconds() / 60.0)
+            has_activity_after_no_money = bool((recent["time_utc"] > last_nm_ts).any()) if not recent.empty else False
+
+        success_after_no_money = False
+        if pd.notna(last_nm_ts) and (not recent.empty):
+            recent_success = recent[recent["action"].astype(str).isin(success_actions)].copy()
+            if not recent_success.empty:
+                success_after_no_money = bool((recent_success["time_utc"] > last_nm_ts).any())
+
+        alert_msg = (
+            "Alerta de riesgo/fondos: se detectaron rechazos por balance insuficiente o NO_MONEY en MT5. "
+            "El bot sigue activo y no se detiene, pero no puede abrir nuevas operaciones hasta corregir margen/fondos."
+        )
+        if success_after_no_money:
+            st.success("NO_MONEY resuelto: se detectó al menos una orden enviada con éxito después del último rechazo.")
+        elif has_activity_after_no_money and (mins_since_no_money is not None) and (mins_since_no_money > float(heartbeat_minutes)):
+            st.warning(
+                "Último NO_MONEY detectado, pero hubo actividad posterior sin repetir rechazo inmediato. "
+                "Verifica próximos intentos de orden para confirmar resolución completa."
+            )
+        elif (mins_since_no_money is None) or (mins_since_no_money <= float(no_money_alert_minutes)):
+            st.error(alert_msg)
+        else:
+            st.warning("Hubo rechazos NO_MONEY anteriormente, pero no son recientes.")
+
+        nm_age_txt = "N/A" if mins_since_no_money is None else f"{mins_since_no_money:.1f}m"
+        st.caption(
+            f"Último rechazo NO_MONEY: {str(last_nm.get('time_utc', 'N/A'))} | "
+            f"edad={nm_age_txt} | action={str(last_nm.get('action', 'N/A'))} | "
+            f"detail={str(last_nm.get('detail', ''))[:220]}"
+        )
 
     # Semáforo operativo basado en señal de vida reciente y errores de calendario.
-    last_ts = activity["time_utc"].iloc[-1]
+    last_ts = activity_live["time_utc"].iloc[-1]
     mins_since_last = float((now_utc - last_ts).total_seconds() / 60.0)
-    has_recent_heartbeat = mins_since_last <= 5.0
+    has_recent_heartbeat = mins_since_last <= float(heartbeat_minutes)
+    has_recent_no_money = (mins_since_no_money is not None) and (mins_since_no_money <= float(heartbeat_minutes) * 2.0)
     has_calendar_error = bool(recent["action"].astype(str).eq("calendar_refresh_error").any()) if not recent.empty else False
     has_recent_refresh = bool(recent["action"].astype(str).eq("calendar_refresh").any()) if not recent.empty else False
     only_no_events = bool(
@@ -1242,6 +1339,10 @@ def render_live_status_panel(
         health_state = "VERDE"
         health_msg = "Bot activo y refrescando calendario con normalidad."
         st.success(f"Semáforo LIVE: {health_state} | {health_msg}")
+    elif (live_pid is not None) and has_recent_no_money:
+        health_state = "AMARILLO"
+        health_msg = "Bot activo, pero bloqueado por margen/fondos (NO_MONEY reciente)."
+        st.warning(f"Semáforo LIVE: {health_state} | {health_msg}")
     elif (live_pid is not None) and has_recent_heartbeat and (only_no_events or not has_recent_refresh):
         health_state = "AMARILLO"
         health_msg = "Bot activo, pero sin eventos operables recientes."
@@ -1267,8 +1368,8 @@ def render_live_status_panel(
         st.bar_chart(counts)
 
     st.markdown("#### Últimos eventos LIVE")
-    cols = [c for c in ["time_utc", "mode", "strategy", "action", "event_id", "detail"] if c in activity.columns]
-    st.dataframe(activity[cols].tail(120).sort_values("time_utc", ascending=False), use_container_width=True)
+    cols = [c for c in ["time_utc", "mode", "strategy", "action", "event_id", "detail"] if c in activity_live.columns]
+    st.dataframe(activity_live[cols].tail(120).sort_values("time_utc", ascending=False), use_container_width=True)
 
 
 def render_trade_history_tab() -> None:
@@ -1373,7 +1474,7 @@ def render_trade_history_tab() -> None:
     st.caption(f"Archivo de mercado para resultados: {market_path}")
 
     if "time_utc" in enriched.columns:
-        enriched["time_utc"] = pd.to_datetime(enriched["time_utc"], utc=True, errors="coerce")
+        enriched["time_utc"] = parse_datetime_utc(enriched["time_utc"])
         min_date = enriched["time_utc"].dt.date.min()
         max_date = enriched["time_utc"].dt.date.max()
         if pd.notna(min_date) and pd.notna(max_date):
@@ -1641,6 +1742,22 @@ def main() -> None:
                     "DONCHIAN_SESSIONS": "london,ny",
                 }
             )
+        elif strategy_mode in {"turtle_atr", "atr_breakout", "vol_breakout", "turtle_atr_breakout"}:
+            st.json(
+                {
+                    "TURTLE_LOOKBACK_SECONDS": parse_int(env_vals.get("TURTLE_LOOKBACK_SECONDS"), 1200),
+                    "TURTLE_BREAKOUT_BUFFER_PIPS": parse_float(env_vals.get("TURTLE_BREAKOUT_BUFFER_PIPS"), 0.30),
+                    "TURTLE_MIN_CHANNEL_PIPS": parse_float(env_vals.get("TURTLE_MIN_CHANNEL_PIPS"), 1.20),
+                    "TURTLE_CONFIRM_TICKS": parse_int(env_vals.get("TURTLE_CONFIRM_TICKS"), 2),
+                    "TURTLE_ATR_PERIOD_TICKS": parse_int(env_vals.get("TURTLE_ATR_PERIOD_TICKS"), 120),
+                    "TURTLE_MIN_ATR_PIPS": parse_float(env_vals.get("TURTLE_MIN_ATR_PIPS"), 0.08),
+                    "TURTLE_TRIGGER_QUANTILE": parse_float(env_vals.get("TURTLE_TRIGGER_QUANTILE"), 0.85),
+                    "TURTLE_TREND_EMA_SPAN": parse_int(env_vals.get("TURTLE_TREND_EMA_SPAN"), 180),
+                    "TURTLE_MAX_EXTENSION_ATR": parse_float(env_vals.get("TURTLE_MAX_EXTENSION_ATR"), 2.50),
+                    "TURTLE_SIGNAL_COOLDOWN_SECONDS": parse_int(env_vals.get("TURTLE_SIGNAL_COOLDOWN_SECONDS"), 240),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
         elif strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi"}:
             st.json(
                 {
@@ -1667,6 +1784,22 @@ def main() -> None:
                     "AGENTIC_REWARD_HORIZON_SECONDS": parse_int(env_vals.get("AGENTIC_REWARD_HORIZON_SECONDS"), 45),
                     "AGENTIC_REWARD_TARGET_PIPS": parse_float(env_vals.get("AGENTIC_REWARD_TARGET_PIPS"), 1.20),
                     "AGENTIC_STATE_PATH": env_vals.get("AGENTIC_STATE_PATH", "models/agentic_state.json"),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
+        elif strategy_mode in {"fundamental_llm", "fundamental", "macro_llm", "news_llm"}:
+            st.json(
+                {
+                    "FUNDAMENTAL_NEWS_SOURCES": env_vals.get(
+                        "FUNDAMENTAL_NEWS_SOURCES",
+                        "https://www.investing.com/rss/news_25.rss,https://feeds.reuters.com/reuters/businessNews",
+                    ),
+                    "FUNDAMENTAL_NEWS_LOOKBACK_MINUTES": parse_int(env_vals.get("FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"), 240),
+                    "FUNDAMENTAL_MAX_HEADLINES": parse_int(env_vals.get("FUNDAMENTAL_MAX_HEADLINES"), 30),
+                    "FUNDAMENTAL_MIN_CONFIDENCE": parse_float(env_vals.get("FUNDAMENTAL_MIN_CONFIDENCE"), 0.60),
+                    "FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS": parse_int(env_vals.get("FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS"), 300),
+                    "FUNDAMENTAL_LLM_MODEL": env_vals.get("FUNDAMENTAL_LLM_MODEL", "gpt-4o-mini"),
+                    "FUNDAMENTAL_LLM_API_BASE_URL": env_vals.get("FUNDAMENTAL_LLM_API_BASE_URL", "https://api.openai.com/v1"),
                     "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
                 }
             )
@@ -1748,8 +1881,8 @@ def main() -> None:
         )
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "ema_rsi_trend", "agentic_hybrid"] else 0,
+            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"],
+            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"] else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
@@ -1989,6 +2122,66 @@ def main() -> None:
             value=env_vals.get("AGENTIC_STATE_PATH", "models/agentic_state.json"),
             help="Archivo donde Agentic IA guarda pesos aprendidos entre reinicios.",
         )
+        section_card(
+            "Fundamental + LLM",
+            "Analiza titulares macro/economicos de fuentes RSS y consulta un LLM para decidir BUY/SELL/HOLD sobre cualquier simbolo (forex, commodities, indices/futuros, acciones).",
+        )
+        fundamental_news_sources = st.text_area(
+            "FUNDAMENTAL_NEWS_SOURCES",
+            value=env_vals.get(
+                "FUNDAMENTAL_NEWS_SOURCES",
+                "https://www.investing.com/rss/news_25.rss,https://feeds.reuters.com/reuters/businessNews,https://www.fxstreet.com/rss/news,https://feeds.marketwatch.com/marketwatch/topstories/",
+            ),
+            help="URLs RSS separadas por coma.",
+        )
+        fundamental_lookback_minutes = st.number_input(
+            "FUNDAMENTAL_NEWS_LOOKBACK_MINUTES",
+            min_value=30,
+            max_value=1440,
+            value=parse_int(env_vals.get("FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"), 240),
+            step=30,
+        )
+        fundamental_max_headlines = st.number_input(
+            "FUNDAMENTAL_MAX_HEADLINES",
+            min_value=5,
+            max_value=200,
+            value=parse_int(env_vals.get("FUNDAMENTAL_MAX_HEADLINES"), 30),
+            step=5,
+        )
+        fundamental_min_conf = st.number_input(
+            "FUNDAMENTAL_MIN_CONFIDENCE",
+            min_value=0.50,
+            max_value=0.95,
+            value=parse_float(env_vals.get("FUNDAMENTAL_MIN_CONFIDENCE"), 0.60),
+            step=0.01,
+            format="%.2f",
+        )
+        fundamental_cooldown = st.number_input(
+            "FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS",
+            min_value=30,
+            max_value=7200,
+            value=parse_int(env_vals.get("FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS"), 300),
+            step=30,
+        )
+        fundamental_fallback = st.selectbox(
+            "FUNDAMENTAL_USE_HEURISTIC_FALLBACK",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("FUNDAMENTAL_USE_HEURISTIC_FALLBACK"), True) else 1,
+            help="Si el LLM no responde, usa fallback de sentimiento por keywords.",
+        )
+        fundamental_llm_base = st.text_input(
+            "FUNDAMENTAL_LLM_API_BASE_URL",
+            value=env_vals.get("FUNDAMENTAL_LLM_API_BASE_URL", "https://api.openai.com/v1"),
+        )
+        fundamental_llm_model = st.text_input(
+            "FUNDAMENTAL_LLM_MODEL",
+            value=env_vals.get("FUNDAMENTAL_LLM_MODEL", "gpt-4o-mini"),
+        )
+        fundamental_llm_key = st.text_input(
+            "FUNDAMENTAL_LLM_API_KEY",
+            value=env_vals.get("FUNDAMENTAL_LLM_API_KEY", ""),
+            type="password",
+        )
         label_mode = st.selectbox(
             "Modo de etiquetado",
             options=["sign", "quantile", "quantile_monthly"],
@@ -2083,6 +2276,15 @@ def main() -> None:
             env_vals["AGENTIC_REWARD_HORIZON_SECONDS"] = str(int(agentic_horizon))
             env_vals["AGENTIC_REWARD_TARGET_PIPS"] = f"{float(agentic_target_pips):.2f}"
             env_vals["AGENTIC_STATE_PATH"] = str(agentic_state_path).strip() or "models/agentic_state.json"
+            env_vals["FUNDAMENTAL_NEWS_SOURCES"] = str(fundamental_news_sources).replace("\n", ",").strip()
+            env_vals["FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"] = str(int(fundamental_lookback_minutes))
+            env_vals["FUNDAMENTAL_MAX_HEADLINES"] = str(int(fundamental_max_headlines))
+            env_vals["FUNDAMENTAL_MIN_CONFIDENCE"] = f"{float(fundamental_min_conf):.2f}"
+            env_vals["FUNDAMENTAL_SIGNAL_COOLDOWN_SECONDS"] = str(int(fundamental_cooldown))
+            env_vals["FUNDAMENTAL_USE_HEURISTIC_FALLBACK"] = fundamental_fallback
+            env_vals["FUNDAMENTAL_LLM_API_BASE_URL"] = str(fundamental_llm_base).strip()
+            env_vals["FUNDAMENTAL_LLM_MODEL"] = str(fundamental_llm_model).strip() or "gpt-4o-mini"
+            env_vals["FUNDAMENTAL_LLM_API_KEY"] = str(fundamental_llm_key).strip()
             env_vals["DIRECTION_LABEL_MODE"] = label_mode
             env_vals["SEM_MIN_SIGNALS"] = str(int(sem_min_signals_in))
             env_vals["SEM_MIN_EDGE"] = f"{float(sem_min_edge_in):.4f}"

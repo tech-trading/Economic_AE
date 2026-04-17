@@ -21979,3 +21979,4 @@ time_utc,mode,strategy,symbol,action,event_id,detail,policy
 2026-04-17T12:48:36.907444+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-04-17T12:48:48.104581+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-04-17T12:48:57.543965+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-04-17T12:49:08.794927+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"

@@ -142,6 +142,29 @@ class Settings:
     agentic_state_path: str = os.getenv("AGENTIC_STATE_PATH", "models/agentic_state.json")
     agentic_signal_cooldown_seconds: int = int(os.getenv("AGENTIC_SIGNAL_COOLDOWN_SECONDS", "180"))
 
+    # Driven Trading Agentic System (meta-orchestrator)
+    driven_state_path: str = os.getenv("DRIVEN_STATE_PATH", "models/driven_agentic_state.json")
+    driven_learning_rate: float = float(os.getenv("DRIVEN_LEARNING_RATE", "0.15"))
+    driven_explore_prob: float = float(os.getenv("DRIVEN_EXPLORE_PROB", "0.05"))
+    driven_min_agent_confidence: float = float(os.getenv("DRIVEN_MIN_AGENT_CONFIDENCE", "0.55"))
+    driven_min_samples_disable: int = int(os.getenv("DRIVEN_MIN_SAMPLES_DISABLE", "14"))
+    driven_disable_threshold: float = float(os.getenv("DRIVEN_DISABLE_THRESHOLD", "-0.18"))
+    driven_disable_cooldown_minutes: int = int(os.getenv("DRIVEN_DISABLE_COOLDOWN_MINUTES", "45"))
+    driven_reward_horizon_seconds: int = int(os.getenv("DRIVEN_REWARD_HORIZON_SECONDS", "75"))
+    driven_reward_target_pips: float = float(os.getenv("DRIVEN_REWARD_TARGET_PIPS", "1.4"))
+    driven_cost_per_trade_pips: float = float(os.getenv("DRIVEN_COST_PER_TRADE_PIPS", "0.25"))
+    driven_latency_penalty_pips: float = float(os.getenv("DRIVEN_LATENCY_PENALTY_PIPS", "0.08"))
+    driven_max_spread_pips: float = float(os.getenv("DRIVEN_MAX_SPREAD_PIPS", "2.2"))
+    driven_corr_window: int = int(os.getenv("DRIVEN_CORR_WINDOW", "80"))
+    driven_corr_penalty: float = float(os.getenv("DRIVEN_CORR_PENALTY", "0.35"))
+    driven_decision_threshold_floor: float = float(os.getenv("DRIVEN_DECISION_THRESHOLD_FLOOR", "0.55"))
+    driven_decision_threshold_cap: float = float(os.getenv("DRIVEN_DECISION_THRESHOLD_CAP", "0.82"))
+    driven_signal_cooldown_seconds: int = int(os.getenv("DRIVEN_SIGNAL_COOLDOWN_SECONDS", "120"))
+    driven_llm_enabled: bool = os.getenv("DRIVEN_LLM_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}
+    driven_llm_mode: str = os.getenv("DRIVEN_LLM_MODE", "confirm")  # options: confirm, blend, off
+    driven_llm_min_confidence: float = float(os.getenv("DRIVEN_LLM_MIN_CONFIDENCE", "0.62"))
+    driven_llm_veto_gap: float = float(os.getenv("DRIVEN_LLM_VETO_GAP", "0.08"))
+
     # Policy optimization controls
     policy_cost_per_trade_r: float = float(os.getenv("POLICY_COST_PER_TRADE_R", "0.06"))
     policy_spread_sensitivity: float = float(os.getenv("POLICY_SPREAD_SENSITIVITY", "0.15"))

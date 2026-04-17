@@ -35,6 +35,7 @@ class LiveTrader:
         self._last_order_side: str | None = None
         self._last_order_utc: datetime | None = None
         self._active_symbols: set[str] = {str(settings.symbol)}
+        self._risk_halt_until_utc: datetime | None = None
 
         if self.strategy.requires_models and not self.tabular_models and self.lstm_model is None:
             raise RuntimeError("No models loaded. Train first.")
@@ -256,10 +257,90 @@ class LiveTrader:
         calls = int(st.get("calls", 0))
         decisions = int(st.get("decisions", 0))
         last_side = st.get("last_decision_side")
+        top_agents = st.get("top_agents", [])
+        top_agents_txt = ""
+        if isinstance(top_agents, list) and top_agents:
+            compact = []
+            for row in top_agents[:2]:
+                try:
+                    compact.append(f"{row.get('agent')}:{float(row.get('weight', 0.0)):.2f}")
+                except Exception:
+                    continue
+            top_agents_txt = ",".join(compact)
+
+        llm = st.get("llm", {})
+        llm_txt = ""
+        if isinstance(llm, dict) and llm:
+            llm_txt = f"llm_used={llm.get('llm_used', False)};llm_side={llm.get('llm_side', '')};llm_conf={float(llm.get('llm_confidence', 0.0)):.2f}"
+
+        suffix_parts = [x for x in [f"top_agents={top_agents_txt}" if top_agents_txt else "", llm_txt] if x]
+        suffix = f";{'|'.join(suffix_parts)}" if suffix_parts else ""
         return (
             f"agent={agent_name};strategy_class={strategy_class};"
-            f"calls={calls};decisions={decisions};last_side={last_side}"
+            f"calls={calls};decisions={decisions};last_side={last_side}{suffix}"
         )
+
+    def _is_risk_halted(self, now: datetime) -> bool:
+        if self._risk_halt_until_utc is None:
+            return False
+        return bool(now < self._risk_halt_until_utc)
+
+    def _evaluate_risk_halt(self, now: datetime, symbol: str) -> bool:
+        if not bool(getattr(settings, "kill_switch_enabled", True)):
+            return False
+        if self._is_risk_halted(now):
+            return True
+
+        try:
+            deals = self.executor.get_recent_deals(symbol=symbol, days=2)
+        except Exception:
+            return False
+        if deals is None or deals.empty:
+            return False
+
+        close_mask = deals["entry_label"].astype(str).isin(["CLOSE", "REVERSE", "CLOSE_BY"]) if "entry_label" in deals.columns else pd.Series([True] * len(deals))
+        realized = deals[close_mask].copy()
+        if realized.empty or "profit" not in realized.columns:
+            return False
+
+        realized = realized.sort_values("time_utc", ascending=False) if "time_utc" in realized.columns else realized
+        pnl = pd.to_numeric(realized["profit"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        if pnl.size == 0:
+            return False
+
+        consecutive_losses = 0
+        for v in pnl:
+            if v < 0:
+                consecutive_losses += 1
+            else:
+                break
+
+        max_losses = max(1, int(getattr(settings, "kill_switch_max_consecutive_losses", 4)))
+        if consecutive_losses >= max_losses:
+            cooldown = max(5, int(getattr(settings, "kill_switch_cooldown_minutes", 45)))
+            self._risk_halt_until_utc = now + pd.Timedelta(minutes=cooldown).to_pytimedelta()
+            self._log_activity(
+                action="risk_halt_consecutive_losses",
+                detail=f"symbol={symbol},consecutive_losses={consecutive_losses},cooldown_min={cooldown}",
+                symbol=symbol,
+            )
+            return True
+
+        return False
+
+    def _spread_guard_allows_trade(self, symbol: str) -> bool:
+        if not bool(getattr(settings, "live_dynamic_spread_guard", True)):
+            return True
+        ticks = self.executor.get_recent_ticks(symbol, seconds=8)
+        if ticks.empty:
+            return False
+        pip = 0.01 if "JPY" in str(symbol).upper() else 0.0001
+        try:
+            spread_now = float((float(ticks["ask"].iat[-1]) - float(ticks["bid"].iat[-1])) / max(1e-12, pip))
+        except Exception:
+            return False
+        max_spread = float(getattr(settings, "live_max_spread_pips", 2.0))
+        return spread_now <= max_spread
 
     def _build_decision(self, event_row: pd.Series, symbol: str) -> TradeDecision | None:
         ticks = self.executor.get_recent_ticks(symbol, seconds=settings.lookback_seconds + 120)
@@ -397,6 +478,24 @@ class LiveTrader:
         action_ok = "order_sent_eventless" if eventless else "order_sent"
         action_fail_default = "order_error_eventless" if eventless else "order_error"
         action_fail_no_money = "order_error_no_money_eventless" if eventless else "order_error_no_money"
+
+        if self._evaluate_risk_halt(now=now, symbol=symbol):
+            self._log_activity(
+                action="risk_halt_skip_order",
+                event_id=event_id,
+                detail=f"symbol={symbol},until={self._risk_halt_until_utc.isoformat() if self._risk_halt_until_utc else ''}",
+                symbol=symbol,
+            )
+            return False
+
+        if not self._spread_guard_allows_trade(symbol):
+            self._log_activity(
+                action="skip_dynamic_spread_guard",
+                event_id=event_id,
+                detail=f"symbol={symbol},max_spread_pips={float(getattr(settings, 'live_max_spread_pips', 2.0))}",
+                symbol=symbol,
+            )
+            return False
 
         try:
             self.executor.send_market_order(symbol, decision)

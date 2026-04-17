@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections import deque
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -558,6 +559,453 @@ class FundamentalLLMStrategy(Strategy):
         return TradeDecision(side=action, confidence=confidence, proba_buy=proba_buy)
 
 
+class DrivenTradingAgenticSystem(Strategy):
+    requires_models: bool = True
+    requires_event: bool = False
+
+    def __init__(self, settings, policy: dict):
+        self.policy = policy
+        self.learning_rate = float(np.clip(getattr(settings, "driven_learning_rate", 0.15), 0.01, 1.0))
+        self.explore_prob = float(np.clip(getattr(settings, "driven_explore_prob", 0.05), 0.0, 0.50))
+        self.min_agent_confidence = float(np.clip(getattr(settings, "driven_min_agent_confidence", 0.55), 0.50, 0.95))
+        self.min_samples_disable = max(5, int(getattr(settings, "driven_min_samples_disable", 14)))
+        self.disable_threshold = float(np.clip(getattr(settings, "driven_disable_threshold", -0.18), -0.95, 0.10))
+        self.disable_cooldown_minutes = max(5, int(getattr(settings, "driven_disable_cooldown_minutes", 45)))
+        self.reward_horizon_seconds = max(15, int(getattr(settings, "driven_reward_horizon_seconds", 75)))
+        self.reward_target_pips = max(0.5, float(getattr(settings, "driven_reward_target_pips", 1.4)))
+        self.cost_per_trade_pips = max(0.0, float(getattr(settings, "driven_cost_per_trade_pips", 0.25)))
+        self.latency_penalty_pips = max(0.0, float(getattr(settings, "driven_latency_penalty_pips", 0.08)))
+        self.max_spread_pips = max(0.0, float(getattr(settings, "driven_max_spread_pips", 2.2)))
+        self.corr_window = max(20, int(getattr(settings, "driven_corr_window", 80)))
+        self.corr_penalty = float(np.clip(getattr(settings, "driven_corr_penalty", 0.35), 0.0, 1.0))
+        self.threshold_floor = float(np.clip(getattr(settings, "driven_decision_threshold_floor", 0.55), 0.50, 0.90))
+        self.threshold_cap = float(np.clip(getattr(settings, "driven_decision_threshold_cap", 0.82), self.threshold_floor, 0.98))
+        self.signal_cooldown_seconds = max(0, int(getattr(settings, "driven_signal_cooldown_seconds", 120)))
+        self.llm_enabled = bool(getattr(settings, "driven_llm_enabled", True))
+        self.llm_mode = str(getattr(settings, "driven_llm_mode", "confirm")).strip().lower()
+        self.llm_min_confidence = float(np.clip(getattr(settings, "driven_llm_min_confidence", 0.62), 0.50, 0.98))
+        self.llm_veto_gap = float(np.clip(getattr(settings, "driven_llm_veto_gap", 0.08), 0.0, 0.35))
+
+        self.state_path = Path(str(getattr(settings, "driven_state_path", "models/driven_agentic_state.json")))
+        self.pending_trades: list[dict[str, Any]] = []
+        self._last_signal_side: str | None = None
+        self._last_signal_ts: pd.Timestamp | None = None
+        self._last_llm_meta: dict[str, Any] = {}
+
+        self.weights: dict[str, float] = {
+            "ema_rsi": 1.0,
+            "donchian": 1.0,
+            "turtle_atr": 1.0,
+            "zscore": 1.0,
+            "momentum": 1.0,
+            "default": 1.0,
+        }
+        self.stats: dict[str, dict[str, Any]] = {
+            k: {
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "avg_reward": 0.0,
+                "disable_until": "",
+            }
+            for k in self.weights
+        }
+        self.agent_returns: dict[str, deque[float]] = {k: deque(maxlen=self.corr_window) for k in self.weights}
+
+        self.default_agent = DefaultStrategy()
+        self.zscore_agent = ZScoreStrategy(
+            lookback_seconds=int(getattr(settings, "z_score_lookback_seconds", 300)),
+            z_threshold=float(getattr(settings, "z_score_threshold", 0.7)),
+            z_weight=float(getattr(settings, "z_weight", 1.0)),
+            mode=str(getattr(settings, "z_combination_mode", "weighted")),
+        )
+        self.momentum_agent = MomentumStrategy(
+            lookback_seconds=int(getattr(settings, "momentum_lookback_seconds", 300)),
+            momentum_threshold=float(getattr(settings, "momentum_threshold", 0.0005)),
+            momentum_weight=float(getattr(settings, "momentum_weight", 1.0)),
+            mode=str(getattr(settings, "momentum_mode", "weighted")),
+        )
+        self.ema_agent = EmaRsiTrendStrategy(
+            fast_span=int(getattr(settings, "ema_fast_span", 21)),
+            slow_span=int(getattr(settings, "ema_slow_span", 55)),
+            rsi_period=int(getattr(settings, "ema_rsi_period", 14)),
+            rsi_buy_level=float(getattr(settings, "ema_rsi_buy_level", 56.0)),
+            rsi_sell_level=float(getattr(settings, "ema_rsi_sell_level", 44.0)),
+            min_separation_pips=float(getattr(settings, "ema_min_separation_pips", 0.20)),
+            momentum_lookback_ticks=int(getattr(settings, "ema_momentum_lookback_ticks", 20)),
+            min_momentum_pips=float(getattr(settings, "ema_min_momentum_pips", 0.25)),
+            vol_period=int(getattr(settings, "ema_vol_period", 40)),
+            min_vol_pips=float(getattr(settings, "ema_min_vol_pips", 0.05)),
+            signal_cooldown_seconds=int(getattr(settings, "ema_signal_cooldown_seconds", 180)),
+        )
+        self.donchian_agent = DonchianBreakoutStrategy(
+            lookback_seconds=int(getattr(settings, "donchian_lookback_seconds", 600)),
+            breakout_buffer_pips=float(getattr(settings, "donchian_breakout_buffer_pips", 0.2)),
+            min_channel_pips=float(getattr(settings, "donchian_min_channel_pips", 1.0)),
+            confirm_ticks=int(getattr(settings, "donchian_confirm_ticks", 1)),
+            trigger_quantile=float(getattr(settings, "donchian_trigger_quantile", 0.80)),
+            session_filter=bool(getattr(settings, "donchian_session_filter", False)),
+            sessions=str(getattr(settings, "donchian_sessions", "london,ny")),
+        )
+        self.turtle_agent = TurtleAtrBreakoutStrategy(
+            lookback_seconds=int(getattr(settings, "turtle_lookback_seconds", 3600)),
+            breakout_buffer_pips=float(getattr(settings, "turtle_breakout_buffer_pips", 0.10)),
+            min_channel_pips=float(getattr(settings, "turtle_min_channel_pips", 0.02)),
+            confirm_ticks=int(getattr(settings, "turtle_confirm_ticks", 1)),
+            atr_period_ticks=int(getattr(settings, "turtle_atr_period_ticks", 120)),
+            min_atr_pips=float(getattr(settings, "turtle_min_atr_pips", 0.05)),
+            trigger_quantile=float(getattr(settings, "turtle_trigger_quantile", 0.85)),
+            trend_ema_span=int(getattr(settings, "turtle_trend_ema_span", 180)),
+            max_extension_atr=float(getattr(settings, "turtle_max_extension_atr", 2.50)),
+            signal_cooldown_seconds=int(getattr(settings, "turtle_signal_cooldown_seconds", 240)),
+        )
+        self.llm_agent = FundamentalLLMStrategy(settings=settings) if self.llm_enabled and self.llm_mode != "off" else None
+
+        self._load_state()
+
+    @staticmethod
+    def _pip_size(symbol: str) -> float:
+        sym = str(symbol or "").upper()
+        return 0.01 if "JPY" in sym else 0.0001
+
+    def _load_state(self) -> None:
+        if not self.state_path.exists():
+            return
+        try:
+            obj = json.loads(self.state_path.read_text(encoding="utf-8"))
+            for k in self.weights:
+                if k in obj.get("weights", {}):
+                    self.weights[k] = float(obj["weights"][k])
+            raw_stats = obj.get("stats", {})
+            if isinstance(raw_stats, dict):
+                for k in self.stats:
+                    if k in raw_stats and isinstance(raw_stats[k], dict):
+                        st = raw_stats[k]
+                        self.stats[k]["trades"] = int(st.get("trades", self.stats[k]["trades"]))
+                        self.stats[k]["wins"] = int(st.get("wins", self.stats[k]["wins"]))
+                        self.stats[k]["losses"] = int(st.get("losses", self.stats[k]["losses"]))
+                        self.stats[k]["avg_reward"] = float(st.get("avg_reward", self.stats[k]["avg_reward"]))
+                        self.stats[k]["disable_until"] = str(st.get("disable_until", ""))
+        except Exception:
+            return
+
+    def _save_state(self) -> None:
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "weights": self.weights,
+                "stats": self.stats,
+            }
+            self.state_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        except Exception:
+            return
+
+    def get_agent_status(self) -> dict[str, Any]:
+        stats_rows = []
+        for k, st in self.stats.items():
+            stats_rows.append(
+                {
+                    "agent": k,
+                    "weight": float(self.weights.get(k, 1.0)),
+                    "trades": int(st.get("trades", 0)),
+                    "avg_reward": float(st.get("avg_reward", 0.0)),
+                }
+            )
+        stats_rows.sort(key=lambda x: (x["weight"], x["avg_reward"]), reverse=True)
+        return {
+            "agent_name": "driven_trading_agentic_system",
+            "strategy_class": self.__class__.__name__,
+            "calls": int(sum(int(x.get("trades", 0)) for x in self.stats.values())),
+            "decisions": int(sum(int(x.get("wins", 0)) + int(x.get("losses", 0)) for x in self.stats.values())),
+            "last_decision_side": self._last_signal_side,
+            "top_agents": stats_rows[:3],
+            "llm": self._last_llm_meta,
+        }
+
+    def get_last_signal_meta(self) -> dict[str, Any]:
+        return dict(self._last_llm_meta)
+
+    def _is_agent_disabled(self, agent: str, now_ts: pd.Timestamp) -> bool:
+        raw = str(self.stats.get(agent, {}).get("disable_until", "")).strip()
+        if not raw:
+            return False
+        until_ts = pd.to_datetime(raw, utc=True, errors="coerce")
+        if pd.isna(until_ts):
+            return False
+        return bool(now_ts < until_ts)
+
+    def _maybe_disable_agent(self, agent: str, now_ts: pd.Timestamp) -> None:
+        st = self.stats.get(agent, {})
+        trades = int(st.get("trades", 0))
+        avg_reward = float(st.get("avg_reward", 0.0))
+        if trades < self.min_samples_disable:
+            return
+        if avg_reward >= self.disable_threshold:
+            return
+        disable_until = now_ts + pd.Timedelta(minutes=self.disable_cooldown_minutes)
+        st["disable_until"] = disable_until.isoformat()
+
+    def _build_threshold(self, base_threshold: float, spread_pips: float, mid: pd.Series, pip: float) -> float:
+        thr = float(base_threshold)
+        if spread_pips > 1.6:
+            thr += 0.03
+        elif spread_pips > 1.2:
+            thr += 0.02
+
+        if len(mid) >= 20:
+            vol_now = float((mid.diff().dropna() / max(1e-12, pip)).tail(60).std())
+            if np.isfinite(vol_now):
+                if vol_now < 0.09:
+                    thr += 0.02
+                elif vol_now > 0.40:
+                    thr -= 0.02
+
+        return float(np.clip(thr, self.threshold_floor, self.threshold_cap))
+
+    def _corr_penalty(self, agent: str) -> float:
+        x = np.array(self.agent_returns.get(agent, deque(maxlen=self.corr_window)), dtype=np.float64)
+        if x.size < 15:
+            return 0.0
+
+        corr_vals: list[float] = []
+        for other, dq in self.agent_returns.items():
+            if other == agent:
+                continue
+            y = np.array(dq, dtype=np.float64)
+            n = min(len(x), len(y))
+            if n < 15:
+                continue
+            a = x[-n:]
+            b = y[-n:]
+            if np.std(a) <= 1e-9 or np.std(b) <= 1e-9:
+                continue
+            c = float(np.corrcoef(a, b)[0, 1])
+            if np.isfinite(c):
+                corr_vals.append(abs(c))
+
+        if not corr_vals:
+            return 0.0
+        avg_corr = float(np.mean(corr_vals))
+        return float(self.corr_penalty * avg_corr)
+
+    def _update_rewards(self, current_time: pd.Timestamp, current_mid: float, pip: float) -> None:
+        if not self.pending_trades:
+            return
+        still_open: list[dict[str, Any]] = []
+        changed = False
+        for tr in self.pending_trades:
+            if current_time < tr["due_time"]:
+                still_open.append(tr)
+                continue
+
+            side = str(tr["side"]).upper()
+            direction = 1.0 if side == "BUY" else -1.0
+            gross_pips = ((current_mid - float(tr["entry_mid"])) * direction) / max(1e-12, pip)
+            net_pips = gross_pips - float(tr.get("cost_pips", self.cost_per_trade_pips + self.latency_penalty_pips))
+            reward = float(np.tanh(net_pips / self.reward_target_pips))
+            agent = str(tr["agent"])
+
+            old_w = float(self.weights.get(agent, 1.0))
+            new_w = float(np.clip(old_w + self.learning_rate * reward, 0.15, 6.0))
+            self.weights[agent] = new_w
+
+            st = self.stats.get(agent)
+            if st is not None:
+                st["trades"] = int(st.get("trades", 0)) + 1
+                if reward >= 0:
+                    st["wins"] = int(st.get("wins", 0)) + 1
+                else:
+                    st["losses"] = int(st.get("losses", 0)) + 1
+                n = int(st.get("trades", 1))
+                prev_avg = float(st.get("avg_reward", 0.0))
+                st["avg_reward"] = float(prev_avg + (reward - prev_avg) / max(1, n))
+                self._maybe_disable_agent(agent, current_time)
+
+            self.agent_returns[agent].append(float(net_pips))
+            changed = True
+
+        self.pending_trades = still_open
+        if changed:
+            self._save_state()
+
+    def _pick_candidate(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(candidates) == 1:
+            return candidates[0]
+        if random.random() < self.explore_prob:
+            return random.choice(candidates)
+
+        scores: list[tuple[float, dict[str, Any]]] = []
+        total_weight = float(sum(max(1e-6, self.weights.get(c["agent"], 1.0)) for c in candidates))
+        for c in candidates:
+            agent = str(c["agent"])
+            decision = c["decision"]
+            base_w = float(self.weights.get(agent, 1.0)) / max(1e-9, total_weight)
+            edge = abs(float(getattr(decision, "proba_buy", 0.5)) - 0.5)
+            perf = float(self.stats.get(agent, {}).get("avg_reward", 0.0))
+            corr_pen = self._corr_penalty(agent)
+            score = (0.48 * base_w) + (0.30 * float(decision.confidence)) + (0.10 * edge) + (0.12 * perf) - corr_pen
+            scores.append((float(score), c))
+
+        scores.sort(key=lambda x: x[0], reverse=True)
+        return scores[0][1]
+
+    def _llm_filter_and_blend(
+        self,
+        selected: dict[str, Any],
+        llm_decision: TradeDecision | None,
+    ) -> TradeDecision | None:
+        decision = selected["decision"]
+        agent = str(selected["agent"])
+        self._last_llm_meta = {
+            "mode": self.llm_mode,
+            "selected_agent": agent,
+            "llm_used": False,
+            "llm_side": "",
+            "llm_confidence": 0.0,
+            "news_changed": False,
+        }
+
+        if llm_decision is None:
+            return decision
+
+        llm_conf = float(getattr(llm_decision, "confidence", 0.0))
+        llm_side = str(getattr(llm_decision, "side", "")).upper()
+        if llm_conf < self.llm_min_confidence or llm_side not in {"BUY", "SELL"}:
+            return decision
+
+        self._last_llm_meta["llm_used"] = True
+        self._last_llm_meta["llm_side"] = llm_side
+        self._last_llm_meta["llm_confidence"] = llm_conf
+
+        meta_getter = getattr(self.llm_agent, "get_last_signal_meta", None)
+        if callable(meta_getter):
+            try:
+                m = meta_getter() or {}
+                self._last_llm_meta["news_changed"] = bool(m.get("news_changed", False))
+            except Exception:
+                self._last_llm_meta["news_changed"] = False
+
+        base_side = str(decision.side).upper()
+        base_conf = float(decision.confidence)
+        if self.llm_mode == "confirm":
+            if base_side != llm_side and (llm_conf - base_conf) >= self.llm_veto_gap:
+                return None
+            if base_side == llm_side:
+                boosted_conf = float(np.clip(0.55 * base_conf + 0.45 * llm_conf, 0.50, 0.98))
+                proba = float(np.clip((float(decision.proba_buy) + float(llm_decision.proba_buy)) / 2.0, 0.01, 0.99))
+                return TradeDecision(side=decision.side, confidence=boosted_conf, proba_buy=proba)
+            return decision
+
+        if self.llm_mode == "blend":
+            blend_w = float(np.clip(llm_conf, 0.10, 0.70))
+            proba = float(np.clip((1.0 - blend_w) * float(decision.proba_buy) + blend_w * float(llm_decision.proba_buy), 0.01, 0.99))
+            side = "BUY" if proba >= 0.5 else "SELL"
+            conf = float(np.clip(max(base_conf, llm_conf) * 0.9 + 0.05, 0.50, 0.98))
+            return TradeDecision(side=side, confidence=conf, proba_buy=proba)
+
+        return decision
+
+    def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
+        if ticks is None or ticks.empty:
+            return None
+
+        df = ticks
+        if "time_utc" in df.columns and not df["time_utc"].is_monotonic_increasing:
+            df = df.sort_values("time_utc")
+
+        mid = ((df["bid"].astype(float) + df["ask"].astype(float)) / 2.0).dropna()
+        if mid.empty:
+            return None
+
+        if "time_utc" in df.columns:
+            now_ts = pd.to_datetime(df["time_utc"].iloc[-1], utc=True, errors="coerce")
+            if pd.isna(now_ts):
+                now_ts = pd.Timestamp.now(tz="UTC")
+        else:
+            now_ts = pd.Timestamp.now(tz="UTC")
+
+        pip = self._pip_size(getattr(settings, "symbol", "EURUSD"))
+        try:
+            spread_pips = float((float(df["ask"].iat[-1]) - float(df["bid"].iat[-1])) / max(1e-12, pip))
+        except Exception:
+            spread_pips = 0.0
+
+        if self.max_spread_pips > 0 and spread_pips > self.max_spread_pips:
+            return None
+
+        current_mid = float(mid.iloc[-1])
+        self._update_rewards(now_ts, current_mid, pip)
+
+        agent_specs = [
+            ("ema_rsi", self.ema_agent),
+            ("donchian", self.donchian_agent),
+            ("turtle_atr", self.turtle_agent),
+            ("zscore", self.zscore_agent),
+            ("momentum", self.momentum_agent),
+            ("default", self.default_agent),
+        ]
+
+        candidates: list[dict[str, Any]] = []
+        for agent_name, strat in agent_specs:
+            if self._is_agent_disabled(agent_name, now_ts):
+                continue
+            try:
+                dec = strat.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+            except Exception:
+                dec = None
+            if dec is None:
+                continue
+            conf = float(getattr(dec, "confidence", 0.0))
+            if conf < self.min_agent_confidence:
+                continue
+            candidates.append({"agent": agent_name, "decision": dec})
+
+        if not candidates:
+            return None
+
+        selected = self._pick_candidate(candidates)
+        decision = selected["decision"]
+        selected_agent = str(selected["agent"])
+
+        llm_decision = None
+        if self.llm_agent is not None:
+            try:
+                llm_decision = self.llm_agent.decide(event_row, df, bundle, tabular_models, lstm_model, feature_columns, policy, settings)
+            except Exception:
+                llm_decision = None
+
+        decision = self._llm_filter_and_blend(selected, llm_decision)
+        if decision is None:
+            return None
+
+        base_thr = float(self.policy.get("decision_threshold", 0.5))
+        threshold = self._build_threshold(base_thr, spread_pips, mid, pip)
+        if float(decision.confidence) < threshold:
+            return None
+
+        if (
+            self.signal_cooldown_seconds > 0
+            and self._last_signal_side == str(decision.side)
+            and self._last_signal_ts is not None
+        ):
+            elapsed = float((now_ts - self._last_signal_ts).total_seconds())
+            if elapsed < float(self.signal_cooldown_seconds):
+                return None
+
+        self.pending_trades.append(
+            {
+                "agent": selected_agent,
+                "side": str(decision.side),
+                "entry_mid": current_mid,
+                "due_time": now_ts + pd.Timedelta(seconds=self.reward_horizon_seconds),
+                "cost_pips": float(self.cost_per_trade_pips + self.latency_penalty_pips + (0.5 * max(0.0, spread_pips))),
+            }
+        )
+        self._last_signal_side = str(decision.side)
+        self._last_signal_ts = now_ts
+        return decision
+
+
 class AgenticHybridStrategy(Strategy):
     requires_models: bool = False
     requires_event: bool = False
@@ -1084,6 +1532,13 @@ def _build_strategy(name: str, settings, policy: dict) -> Strategy:
         )
     if name in {"agentic", "agentic_hybrid", "agentic_ai", "multi_agent"}:
         return AgenticHybridStrategy(settings=settings, policy=policy)
+    if name in {
+        "driven_trading_agentic_system",
+        "driven_agentic",
+        "driven",
+        "multi_strategy_driven",
+    }:
+        return DrivenTradingAgenticSystem(settings=settings, policy=policy)
     # default fallback
     return DefaultStrategy()
 
@@ -1103,6 +1558,7 @@ def list_supported_strategies() -> list[str]:
         "fundamental_llm",
         "ema_rsi",
         "agentic_hybrid",
+        "driven_trading_agentic_system",
     ]
 
 

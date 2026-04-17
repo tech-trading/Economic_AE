@@ -133,10 +133,21 @@ class Settings:
     agentic_learning_rate: float = float(os.getenv("AGENTIC_LEARNING_RATE", "0.20"))
     agentic_explore_prob: float = float(os.getenv("AGENTIC_EXPLORE_PROB", "0.10"))
     agentic_min_confidence: float = float(os.getenv("AGENTIC_MIN_CONFIDENCE", "0.56"))
+    agentic_reward_decay: float = float(os.getenv("AGENTIC_REWARD_DECAY", "0.92"))
+    agentic_adverse_consensus_min_agents: int = int(os.getenv("AGENTIC_ADVERSE_CONSENSUS_MIN_AGENTS", "2"))
+    agentic_adverse_spread_pips: float = float(os.getenv("AGENTIC_ADVERSE_SPREAD_PIPS", "1.8"))
+    agentic_adverse_vol_pips: float = float(os.getenv("AGENTIC_ADVERSE_VOL_PIPS", "0.10"))
     agentic_reward_horizon_seconds: int = int(os.getenv("AGENTIC_REWARD_HORIZON_SECONDS", "45"))
     agentic_reward_target_pips: float = float(os.getenv("AGENTIC_REWARD_TARGET_PIPS", "1.20"))
     agentic_state_path: str = os.getenv("AGENTIC_STATE_PATH", "models/agentic_state.json")
     agentic_signal_cooldown_seconds: int = int(os.getenv("AGENTIC_SIGNAL_COOLDOWN_SECONDS", "180"))
+
+    # Policy optimization controls
+    policy_cost_per_trade_r: float = float(os.getenv("POLICY_COST_PER_TRADE_R", "0.06"))
+    policy_spread_sensitivity: float = float(os.getenv("POLICY_SPREAD_SENSITIVITY", "0.15"))
+    policy_drawdown_penalty: float = float(os.getenv("POLICY_DRAWDOWN_PENALTY", "0.08"))
+    policy_loss_streak_penalty: float = float(os.getenv("POLICY_LOSS_STREAK_PENALTY", "0.03"))
+    policy_min_trades: int = int(os.getenv("POLICY_MIN_TRADES", "12"))
 
     data_dir: str = os.getenv("DATA_DIR", "data")
     model_dir: str = os.getenv("MODEL_DIR", "models")
@@ -159,6 +170,14 @@ class Settings:
     eventless_eval_seconds: int = int(os.getenv("EVENTLESS_EVAL_SECONDS", "20"))
     eventless_skip_eval_when_max_open: bool = os.getenv("EVENTLESS_SKIP_EVAL_WHEN_MAX_OPEN", "true").strip().lower() in {"1", "true", "yes", "y"}
     live_activity_csv: str = os.getenv("LIVE_ACTIVITY_CSV", "data/live_activity.csv")
+    live_dynamic_spread_guard: bool = os.getenv("LIVE_DYNAMIC_SPREAD_GUARD", "true").strip().lower() in {"1", "true", "yes", "y"}
+    live_max_spread_pips: float = float(os.getenv("LIVE_MAX_SPREAD_PIPS", "2.0"))
+
+    # Intraday kill-switch
+    kill_switch_enabled: bool = os.getenv("KILL_SWITCH_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}
+    kill_switch_max_consecutive_losses: int = int(os.getenv("KILL_SWITCH_MAX_CONSECUTIVE_LOSSES", "4"))
+    kill_switch_max_drawdown_r: float = float(os.getenv("KILL_SWITCH_MAX_DRAWDOWN_R", "3.0"))
+    kill_switch_cooldown_minutes: int = int(os.getenv("KILL_SWITCH_COOLDOWN_MINUTES", "45"))
 
     # --- Risk / exits (ATR-based preferred) ---
     # Riesgo por trade (fracción del capital)

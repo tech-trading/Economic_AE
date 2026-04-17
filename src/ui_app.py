@@ -550,6 +550,27 @@ def _format_countdown(seconds_left: float) -> str:
     return f"{hh:02d}:{mm:02d}:{ss:02d}"
 
 
+EVENTLESS_STRATEGIES = {
+    "ema_rsi",
+    "ema_rsi_trend",
+    "ema_rsi_active",
+    "crossover_rsi",
+    "turtle_atr",
+    "agentic_hybrid",
+    "agentic",
+    "agentic_ai",
+    "multi_agent",
+    "fundamental_llm",
+    "fundamental",
+    "macro_llm",
+    "news_llm",
+    "driven_trading_agentic_system",
+    "driven_agentic",
+    "driven",
+    "multi_strategy_driven",
+}
+
+
 def get_next_trigger_info(
     *,
     events_csv_path: Path,
@@ -560,7 +581,7 @@ def get_next_trigger_info(
     donchian_session_filter: bool,
     donchian_sessions: str,
 ) -> dict[str, object]:
-    if strategy_mode in {"ema_rsi", "ema_rsi_trend", "ema_rsi_active", "crossover_rsi", "turtle_atr", "agentic_hybrid", "agentic", "agentic_ai", "multi_agent", "fundamental_llm", "fundamental", "macro_llm", "news_llm"}:
+    if strategy_mode in EVENTLESS_STRATEGIES:
         return {"status": "eventless_strategy", "path": str(events_csv_path)}
 
     if not events_csv_path.exists():
@@ -1787,6 +1808,24 @@ def main() -> None:
                     "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
                 }
             )
+        elif strategy_mode in {"driven_trading_agentic_system", "driven_agentic", "driven", "multi_strategy_driven"}:
+            st.json(
+                {
+                    "DRIVEN_MODE": "meta-orchestrator with adaptive subagent weighting",
+                    "DRIVEN_LEARNING_RATE": parse_float(env_vals.get("DRIVEN_LEARNING_RATE"), 0.15),
+                    "DRIVEN_EXPLORE_PROB": parse_float(env_vals.get("DRIVEN_EXPLORE_PROB"), 0.05),
+                    "DRIVEN_MIN_AGENT_CONFIDENCE": parse_float(env_vals.get("DRIVEN_MIN_AGENT_CONFIDENCE"), 0.55),
+                    "DRIVEN_REWARD_HORIZON_SECONDS": parse_int(env_vals.get("DRIVEN_REWARD_HORIZON_SECONDS"), 75),
+                    "DRIVEN_REWARD_TARGET_PIPS": parse_float(env_vals.get("DRIVEN_REWARD_TARGET_PIPS"), 1.4),
+                    "DRIVEN_COST_PER_TRADE_PIPS": parse_float(env_vals.get("DRIVEN_COST_PER_TRADE_PIPS"), 0.25),
+                    "DRIVEN_MAX_SPREAD_PIPS": parse_float(env_vals.get("DRIVEN_MAX_SPREAD_PIPS"), 2.2),
+                    "DRIVEN_SIGNAL_COOLDOWN_SECONDS": parse_int(env_vals.get("DRIVEN_SIGNAL_COOLDOWN_SECONDS"), 120),
+                    "DRIVEN_LLM_ENABLED": env_vals.get("DRIVEN_LLM_ENABLED", "true"),
+                    "DRIVEN_LLM_MODE": env_vals.get("DRIVEN_LLM_MODE", "confirm"),
+                    "DRIVEN_STATE_PATH": env_vals.get("DRIVEN_STATE_PATH", "models/driven_agentic_state.json"),
+                    "EVENTLESS_EVAL_SECONDS": parse_int(env_vals.get("EVENTLESS_EVAL_SECONDS"), 20),
+                }
+            )
         elif strategy_mode in {"fundamental_llm", "fundamental", "macro_llm", "news_llm"}:
             st.json(
                 {
@@ -1879,10 +1918,22 @@ def main() -> None:
             index=0 if env_vals.get("PAPER_TRADING", "true").lower() == "false" else 1,
             help="false = LIVE real, true = PAPER pruebas.",
         )
+        strategy_options = [
+            "default",
+            "zscore",
+            "momentum",
+            "donchian",
+            "donchian_nylondon",
+            "turtle_atr",
+            "ema_rsi_trend",
+            "agentic_hybrid",
+            "driven_trading_agentic_system",
+            "fundamental_llm",
+        ]
         strategy = st.selectbox(
             "Estrategia de decisión",
-            options=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"],
-            index=["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"].index(strategy_mode) if strategy_mode in ["default", "zscore", "momentum", "donchian", "donchian_nylondon", "turtle_atr", "ema_rsi_trend", "agentic_hybrid", "fundamental_llm"] else 0,
+            options=strategy_options,
+            index=strategy_options.index(strategy_mode) if strategy_mode in strategy_options else 0,
             help="Selecciona la lógica para generar señal de entrada antes de enviar órdenes.",
         )
 
@@ -2123,6 +2174,165 @@ def main() -> None:
             help="Archivo donde Agentic IA guarda pesos aprendidos entre reinicios.",
         )
         section_card(
+            "Driven Trading Agentic System",
+            "Meta-orquestador multiagente con aprendizaje online, desactivación adaptativa y capa LLM opcional.",
+        )
+        driven_state_path = st.text_input(
+            "DRIVEN_STATE_PATH",
+            value=env_vals.get("DRIVEN_STATE_PATH", "models/driven_agentic_state.json"),
+            help="Estado persistente del meta-orquestador driven.",
+        )
+        driven_learning_rate = st.number_input(
+            "DRIVEN_LEARNING_RATE",
+            min_value=0.01,
+            max_value=1.0,
+            value=parse_float(env_vals.get("DRIVEN_LEARNING_RATE"), 0.15),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_explore_prob = st.number_input(
+            "DRIVEN_EXPLORE_PROB",
+            min_value=0.0,
+            max_value=0.5,
+            value=parse_float(env_vals.get("DRIVEN_EXPLORE_PROB"), 0.05),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_min_agent_conf = st.number_input(
+            "DRIVEN_MIN_AGENT_CONFIDENCE",
+            min_value=0.50,
+            max_value=0.95,
+            value=parse_float(env_vals.get("DRIVEN_MIN_AGENT_CONFIDENCE"), 0.55),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_min_samples_disable = st.number_input(
+            "DRIVEN_MIN_SAMPLES_DISABLE",
+            min_value=5,
+            max_value=300,
+            value=parse_int(env_vals.get("DRIVEN_MIN_SAMPLES_DISABLE"), 14),
+            step=1,
+        )
+        driven_disable_threshold = st.number_input(
+            "DRIVEN_DISABLE_THRESHOLD",
+            min_value=-0.95,
+            max_value=0.20,
+            value=parse_float(env_vals.get("DRIVEN_DISABLE_THRESHOLD"), -0.18),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_disable_cooldown_minutes = st.number_input(
+            "DRIVEN_DISABLE_COOLDOWN_MINUTES",
+            min_value=5,
+            max_value=720,
+            value=parse_int(env_vals.get("DRIVEN_DISABLE_COOLDOWN_MINUTES"), 45),
+            step=5,
+        )
+        driven_reward_horizon = st.number_input(
+            "DRIVEN_REWARD_HORIZON_SECONDS",
+            min_value=15,
+            max_value=1800,
+            value=parse_int(env_vals.get("DRIVEN_REWARD_HORIZON_SECONDS"), 75),
+            step=1,
+        )
+        driven_reward_target_pips = st.number_input(
+            "DRIVEN_REWARD_TARGET_PIPS",
+            min_value=0.1,
+            max_value=20.0,
+            value=parse_float(env_vals.get("DRIVEN_REWARD_TARGET_PIPS"), 1.4),
+            step=0.1,
+            format="%.2f",
+        )
+        driven_cost_per_trade_pips = st.number_input(
+            "DRIVEN_COST_PER_TRADE_PIPS",
+            min_value=0.0,
+            max_value=10.0,
+            value=parse_float(env_vals.get("DRIVEN_COST_PER_TRADE_PIPS"), 0.25),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_latency_penalty_pips = st.number_input(
+            "DRIVEN_LATENCY_PENALTY_PIPS",
+            min_value=0.0,
+            max_value=10.0,
+            value=parse_float(env_vals.get("DRIVEN_LATENCY_PENALTY_PIPS"), 0.08),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_max_spread_pips = st.number_input(
+            "DRIVEN_MAX_SPREAD_PIPS",
+            min_value=0.0,
+            max_value=20.0,
+            value=parse_float(env_vals.get("DRIVEN_MAX_SPREAD_PIPS"), 2.2),
+            step=0.1,
+            format="%.2f",
+        )
+        driven_corr_window = st.number_input(
+            "DRIVEN_CORR_WINDOW",
+            min_value=20,
+            max_value=1000,
+            value=parse_int(env_vals.get("DRIVEN_CORR_WINDOW"), 80),
+            step=5,
+        )
+        driven_corr_penalty = st.number_input(
+            "DRIVEN_CORR_PENALTY",
+            min_value=0.0,
+            max_value=1.0,
+            value=parse_float(env_vals.get("DRIVEN_CORR_PENALTY"), 0.35),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_threshold_floor = st.number_input(
+            "DRIVEN_DECISION_THRESHOLD_FLOOR",
+            min_value=0.50,
+            max_value=0.95,
+            value=parse_float(env_vals.get("DRIVEN_DECISION_THRESHOLD_FLOOR"), 0.55),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_threshold_cap = st.number_input(
+            "DRIVEN_DECISION_THRESHOLD_CAP",
+            min_value=float(driven_threshold_floor),
+            max_value=0.98,
+            value=max(parse_float(env_vals.get("DRIVEN_DECISION_THRESHOLD_CAP"), 0.82), float(driven_threshold_floor)),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_signal_cooldown_seconds = st.number_input(
+            "DRIVEN_SIGNAL_COOLDOWN_SECONDS",
+            min_value=0,
+            max_value=7200,
+            value=parse_int(env_vals.get("DRIVEN_SIGNAL_COOLDOWN_SECONDS"), 120),
+            step=5,
+        )
+        driven_llm_enabled = st.selectbox(
+            "DRIVEN_LLM_ENABLED",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("DRIVEN_LLM_ENABLED"), True) else 1,
+        )
+        driven_llm_mode = st.selectbox(
+            "DRIVEN_LLM_MODE",
+            options=["confirm", "blend", "off"],
+            index=["confirm", "blend", "off"].index(env_vals.get("DRIVEN_LLM_MODE", "confirm")) if env_vals.get("DRIVEN_LLM_MODE", "confirm") in {"confirm", "blend", "off"} else 0,
+            help="confirm = valida decisión final; blend = combina señal; off = desactiva LLM en el meta-orquestador.",
+        )
+        driven_llm_min_confidence = st.number_input(
+            "DRIVEN_LLM_MIN_CONFIDENCE",
+            min_value=0.50,
+            max_value=0.98,
+            value=parse_float(env_vals.get("DRIVEN_LLM_MIN_CONFIDENCE"), 0.62),
+            step=0.01,
+            format="%.2f",
+        )
+        driven_llm_veto_gap = st.number_input(
+            "DRIVEN_LLM_VETO_GAP",
+            min_value=0.0,
+            max_value=0.50,
+            value=parse_float(env_vals.get("DRIVEN_LLM_VETO_GAP"), 0.08),
+            step=0.01,
+            format="%.2f",
+        )
+        section_card(
             "Fundamental + LLM",
             "Analiza titulares macro/economicos de fuentes RSS y consulta un LLM para decidir BUY/SELL/HOLD sobre cualquier simbolo (forex, commodities, indices/futuros, acciones).",
         )
@@ -2276,6 +2486,27 @@ def main() -> None:
             env_vals["AGENTIC_REWARD_HORIZON_SECONDS"] = str(int(agentic_horizon))
             env_vals["AGENTIC_REWARD_TARGET_PIPS"] = f"{float(agentic_target_pips):.2f}"
             env_vals["AGENTIC_STATE_PATH"] = str(agentic_state_path).strip() or "models/agentic_state.json"
+            env_vals["DRIVEN_STATE_PATH"] = str(driven_state_path).strip() or "models/driven_agentic_state.json"
+            env_vals["DRIVEN_LEARNING_RATE"] = f"{float(driven_learning_rate):.2f}"
+            env_vals["DRIVEN_EXPLORE_PROB"] = f"{float(driven_explore_prob):.2f}"
+            env_vals["DRIVEN_MIN_AGENT_CONFIDENCE"] = f"{float(driven_min_agent_conf):.2f}"
+            env_vals["DRIVEN_MIN_SAMPLES_DISABLE"] = str(int(driven_min_samples_disable))
+            env_vals["DRIVEN_DISABLE_THRESHOLD"] = f"{float(driven_disable_threshold):.2f}"
+            env_vals["DRIVEN_DISABLE_COOLDOWN_MINUTES"] = str(int(driven_disable_cooldown_minutes))
+            env_vals["DRIVEN_REWARD_HORIZON_SECONDS"] = str(int(driven_reward_horizon))
+            env_vals["DRIVEN_REWARD_TARGET_PIPS"] = f"{float(driven_reward_target_pips):.2f}"
+            env_vals["DRIVEN_COST_PER_TRADE_PIPS"] = f"{float(driven_cost_per_trade_pips):.2f}"
+            env_vals["DRIVEN_LATENCY_PENALTY_PIPS"] = f"{float(driven_latency_penalty_pips):.2f}"
+            env_vals["DRIVEN_MAX_SPREAD_PIPS"] = f"{float(driven_max_spread_pips):.2f}"
+            env_vals["DRIVEN_CORR_WINDOW"] = str(int(driven_corr_window))
+            env_vals["DRIVEN_CORR_PENALTY"] = f"{float(driven_corr_penalty):.2f}"
+            env_vals["DRIVEN_DECISION_THRESHOLD_FLOOR"] = f"{float(driven_threshold_floor):.2f}"
+            env_vals["DRIVEN_DECISION_THRESHOLD_CAP"] = f"{float(driven_threshold_cap):.2f}"
+            env_vals["DRIVEN_SIGNAL_COOLDOWN_SECONDS"] = str(int(driven_signal_cooldown_seconds))
+            env_vals["DRIVEN_LLM_ENABLED"] = driven_llm_enabled
+            env_vals["DRIVEN_LLM_MODE"] = str(driven_llm_mode).strip().lower() or "confirm"
+            env_vals["DRIVEN_LLM_MIN_CONFIDENCE"] = f"{float(driven_llm_min_confidence):.2f}"
+            env_vals["DRIVEN_LLM_VETO_GAP"] = f"{float(driven_llm_veto_gap):.2f}"
             env_vals["FUNDAMENTAL_NEWS_SOURCES"] = str(fundamental_news_sources).replace("\n", ",").strip()
             env_vals["FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"] = str(int(fundamental_lookback_minutes))
             env_vals["FUNDAMENTAL_MAX_HEADLINES"] = str(int(fundamental_max_headlines))

@@ -22390,3 +22390,6 @@ time_utc,mode,strategy,symbol,action,event_id,detail,policy
 2026-04-19T12:36:10.450442+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-04-19T12:36:20.471196+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
 2026-04-19T12:36:30.489603+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-04-19T12:36:40.512940+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-04-19T12:36:50.533207+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"
+2026-04-19T12:37:00.554892+00:00,LIVE,fundamental_llm,EURUSD,eventless_no_decision,,strategy_returned_none,"{""decision_threshold"": 0.6600000000000001, ""no_trade_band"": 0.0}"

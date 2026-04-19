@@ -257,3 +257,7 @@
 [2026-04-18T20:48:29] Generando reporte diario (pre-check)
 [2026-04-18T20:51:49] Ejecutando auto-optimizacion
 [2026-04-18T20:51:55] Sin cambios en .env; no se reinicia bot
+[2026-04-19T06:43:03] Ejecucion unica del ciclo
+[2026-04-19T06:43:04] Generando reporte diario (pre-check)
+[2026-04-19T06:43:06] Ejecutando auto-optimizacion
+[2026-04-19T06:43:08] Sin cambios en .env; no se reinicia bot

@@ -165,6 +165,21 @@ class Settings:
     driven_llm_min_confidence: float = float(os.getenv("DRIVEN_LLM_MIN_CONFIDENCE", "0.62"))
     driven_llm_veto_gap: float = float(os.getenv("DRIVEN_LLM_VETO_GAP", "0.08"))
 
+    # Runtime agent framework (agents/trading/*.md)
+    agent_runtime_enabled: bool = os.getenv("AGENT_RUNTIME_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}
+    agent_runtime_strict: bool = os.getenv("AGENT_RUNTIME_STRICT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    agent_runtime_min_confidence: float = float(os.getenv("AGENT_RUNTIME_MIN_CONFIDENCE", "0.55"))
+    agent_runtime_max_spread_pips: float = float(os.getenv("AGENT_RUNTIME_MAX_SPREAD_PIPS", "2.2"))
+    enable_strategy_architect_agent: bool = os.getenv("ENABLE_STRATEGY_ARCHITECT_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_market_data_agent: bool = os.getenv("ENABLE_MARKET_DATA_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_backtesting_agent: bool = os.getenv("ENABLE_BACKTESTING_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_risk_manager_agent: bool = os.getenv("ENABLE_RISK_MANAGER_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_optimizer_agent: bool = os.getenv("ENABLE_OPTIMIZER_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_llm_meta_agent: bool = os.getenv("ENABLE_LLM_META_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_execution_agent: bool = os.getenv("ENABLE_EXECUTION_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_monitoring_agent: bool = os.getenv("ENABLE_MONITORING_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+    enable_qa_agent: bool = os.getenv("ENABLE_QA_AGENT", "true").strip().lower() in {"1", "true", "yes", "y"}
+
     # Policy optimization controls
     policy_cost_per_trade_r: float = float(os.getenv("POLICY_COST_PER_TRADE_R", "0.06"))
     policy_spread_sensitivity: float = float(os.getenv("POLICY_SPREAD_SENSITIVITY", "0.15"))

@@ -17,6 +17,7 @@ from src.models import ensemble_predict_proba, load_artifacts
 from src.mt5_executor import MT5Executor, TradeDecision
 from src.policy import load_policy
 from src.strategies import get_strategy
+from src.agent_runtime import TradingAgentRuntime
 
 
 class LiveTrader:
@@ -31,6 +32,7 @@ class LiveTrader:
 
         # strategy selection
         self.strategy = get_strategy(settings.strategy, settings, self.policy)
+        self.agent_runtime = TradingAgentRuntime(settings=settings, policy=self.policy)
         self._recent_order_times: deque[datetime] = deque()
         self._last_order_side: str | None = None
         self._last_order_utc: datetime | None = None
@@ -274,6 +276,9 @@ class LiveTrader:
             llm_txt = f"llm_used={llm.get('llm_used', False)};llm_side={llm.get('llm_side', '')};llm_conf={float(llm.get('llm_confidence', 0.0)):.2f}"
 
         suffix_parts = [x for x in [f"top_agents={top_agents_txt}" if top_agents_txt else "", llm_txt] if x]
+        runtime_note = self.agent_runtime.status_note()
+        if runtime_note:
+            suffix_parts.append(f"runtime={runtime_note}")
         suffix = f";{'|'.join(suffix_parts)}" if suffix_parts else ""
         return (
             f"agent={agent_name};strategy_class={strategy_class};"
@@ -347,6 +352,15 @@ class LiveTrader:
         if ticks.empty:
             return None
 
+        pre_v = self.agent_runtime.pre_decision(
+            event_row=event_row,
+            ticks=ticks,
+            symbol=symbol,
+            strategy_name=str(settings.strategy),
+        )
+        if not pre_v.allow_trade:
+            return None
+
         evt = event_row.copy() if isinstance(event_row, pd.Series) else pd.Series(dtype=object)
         evt["symbol"] = str(symbol)
 
@@ -358,7 +372,16 @@ class LiveTrader:
         else:
             bundle = SimpleNamespace(X_tabular=pd.DataFrame(), X_seq=np.zeros((1, 1, 1), dtype=np.float32))
         # delegate to selected strategy
-        return self.strategy.decide(evt, ticks, bundle, self.tabular_models, self.lstm_model, self.feature_columns, self.policy, settings)
+        decision = self.strategy.decide(evt, ticks, bundle, self.tabular_models, self.lstm_model, self.feature_columns, self.policy, settings)
+        post_v = self.agent_runtime.post_decision(
+            decision=decision,
+            event_row=evt,
+            ticks=ticks,
+            symbol=symbol,
+        )
+        if not post_v.allow_trade:
+            return None
+        return decision
 
     @staticmethod
     def _parse_symbol_map(raw: str) -> dict[str, list[str]]:
@@ -484,6 +507,21 @@ class LiveTrader:
                 action="risk_halt_skip_order",
                 event_id=event_id,
                 detail=f"symbol={symbol},until={self._risk_halt_until_utc.isoformat() if self._risk_halt_until_utc else ''}",
+                symbol=symbol,
+            )
+            return False
+
+        pre_exec = self.agent_runtime.pre_execution(
+            decision=decision,
+            symbol=symbol,
+            event_id=event_id,
+            now=now,
+        )
+        if not pre_exec.allow_trade:
+            self._log_activity(
+                action="agent_runtime_pre_execution_block",
+                event_id=event_id,
+                detail=f"symbol={symbol},reason={pre_exec.reason}",
                 symbol=symbol,
             )
             return False

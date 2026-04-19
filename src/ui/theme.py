@@ -22,6 +22,9 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
         toggle_track_off = "#3b4d58"
         toggle_track_on = "#0ea5a0"
         toggle_knob = "#f8fbfb"
+        toggle_knob_border = "#3e5968"
+        toggle_shell_bg = "#1b2a34"
+        toggle_shell_border = "#365262"
         slider_track = "#324754"
         slider_fill = "#0ea5a0"
         scrollbar_track = "#1b2a34"
@@ -45,9 +48,12 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
         tab_text = "#24433c"
         tab_active_bg = "linear-gradient(135deg, #e0f6f0 0%, #fff3ee 100%)"
         tab_active_text = "#11352f"
-        toggle_track_off = "#7f968d"
+        toggle_track_off = "#b8cbc5"
         toggle_track_on = "#0f766e"
-        toggle_knob = "#ffffff"
+        toggle_knob = "#145c54"
+        toggle_knob_border = "#0b3f39"
+        toggle_shell_bg = "#eef7f4"
+        toggle_shell_border = "#9cbab1"
         slider_track = "#d5e3de"
         slider_fill = "#0f766e"
         scrollbar_track = "#e4ece9"
@@ -76,6 +82,9 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
             --toggle-track-off: {toggle_track_off};
             --toggle-track-on: {toggle_track_on};
             --toggle-knob: {toggle_knob};
+            --toggle-knob-border: {toggle_knob_border};
+            --toggle-shell-bg: {toggle_shell_bg};
+            --toggle-shell-border: {toggle_shell_border};
             --slider-track: {slider_track};
             --slider-fill: {slider_fill};
             --scrollbar-track: {scrollbar_track};
@@ -96,20 +105,63 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
             padding-top: 4.6rem;
         }}
 
-        #theme-switch-anchor + div div[data-testid="stToggle"] {{
+        #theme-switch-anchor + div .theme-chip {{
             position: fixed;
             top: 0.75rem;
             right: 1rem;
-            width: min(320px, calc(100vw - 1.5rem));
+            z-index: 10000;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 0.28rem 0.62rem;
+            background: color-mix(in srgb, var(--card) 86%, transparent);
+            box-shadow: var(--shadow);
+            font-weight: 800;
+            letter-spacing: 0.01em;
+            backdrop-filter: blur(8px);
+        }}
+
+        #theme-switch-anchor + div .theme-chip .icon {{
+            width: 1.15rem;
+            height: 1.15rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }}
+
+        #theme-switch-anchor + div .theme-chip.light {{
+            color: #9a3412;
+            border-color: #f3b8a7;
+            background: color-mix(in srgb, #fff3ee 75%, var(--card));
+        }}
+
+        #theme-switch-anchor + div .theme-chip.dark {{
+            color: #0ea5a0;
+            border-color: #2d5b62;
+            background: color-mix(in srgb, #13272c 78%, var(--card));
+        }}
+
+        #theme-switch-anchor + div div[data-testid="stToggle"] {{
+            position: fixed;
+            top: 0.66rem;
+            right: 1rem;
+            width: auto;
             z-index: 9999;
             margin: 0;
         }}
 
         @media (max-width: 900px) {{
+            #theme-switch-anchor + div .theme-chip {{
+                right: 0.5rem;
+                top: 0.5rem;
+            }}
+
             #theme-switch-anchor + div div[data-testid="stToggle"] {{
                 right: 0.5rem;
                 top: 0.5rem;
-                width: min(260px, calc(100vw - 1rem));
             }}
 
             div.block-container {{
@@ -215,10 +267,10 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
         }}
 
         div[data-testid="stToggle"] {{
-            background: var(--card);
-            border: 1px solid var(--line);
-            border-radius: 12px;
-            padding: 0.35rem 0.55rem;
+            background: var(--toggle-shell-bg);
+            border: 1px solid var(--toggle-shell-border);
+            border-radius: 999px;
+            padding: 0.2rem 0.36rem;
             margin-bottom: 0.35rem;
             box-shadow: var(--shadow);
         }}
@@ -232,7 +284,8 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
 
         div[data-testid="stToggle"] [role="switch"] {{
             background-color: var(--toggle-track-off) !important;
-            border: 2px solid var(--line) !important;
+            border: 2px solid var(--toggle-shell-border) !important;
+            min-width: 42px;
         }}
 
         div[data-testid="stToggle"] [role="switch"][aria-checked="true"] {{
@@ -242,12 +295,13 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
 
         div[data-testid="stToggle"] [role="switch"] > div {{
             background: var(--toggle-knob) !important;
+            border: 1px solid var(--toggle-knob-border) !important;
             box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
         }}
 
         div[data-testid="stToggle"] [data-baseweb="switch"] > div {{
             background-color: var(--toggle-track-off) !important;
-            border: 1px solid var(--line) !important;
+            border: 1px solid var(--toggle-shell-border) !important;
         }}
 
         div[data-testid="stToggle"] [data-baseweb="switch"] input:checked + div {{
@@ -257,7 +311,12 @@ def apply_modern_theme(theme_mode: str = "light") -> None:
 
         div[data-testid="stToggle"] [data-baseweb="switch"] > div > div {{
             background: var(--toggle-knob) !important;
+            border: 1px solid var(--toggle-knob-border) !important;
             box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+        }}
+
+        div[data-testid="stToggle"] [data-baseweb="switch"] > div > div > div {{
+            background: var(--toggle-knob) !important;
         }}
 
         div[data-testid="stSlider"] [role="slider"] {{

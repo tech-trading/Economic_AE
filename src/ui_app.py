@@ -105,6 +105,23 @@ def parse_bool(value: str | None, default: bool) -> bool:
     return parse_bool_impl(value, default)
 
 
+def detect_runtime_preset(env_vals: dict[str, str]) -> str:
+    strict = str(env_vals.get("AGENT_RUNTIME_STRICT", "true")).strip().lower()
+    min_conf = str(env_vals.get("AGENT_RUNTIME_MIN_CONFIDENCE", "0.55")).strip()
+    max_spread = str(env_vals.get("AGENT_RUNTIME_MAX_SPREAD_PIPS", "2.2")).strip()
+    driven_floor = str(env_vals.get("DRIVEN_DECISION_THRESHOLD_FLOOR", "0.55")).strip()
+    llm_mode = str(env_vals.get("DRIVEN_LLM_MODE", "confirm")).strip().lower()
+    explore = str(env_vals.get("DRIVEN_EXPLORE_PROB", "0.05")).strip()
+
+    if strict == "true" and min_conf == "0.62" and max_spread == "1.60" and driven_floor == "0.62" and llm_mode == "confirm" and explore == "0.03":
+        return "Conservador"
+    if strict == "true" and min_conf == "0.55" and max_spread == "2.20" and driven_floor == "0.55" and llm_mode == "confirm" and explore == "0.05":
+        return "Balanceado"
+    if strict == "false" and min_conf == "0.52" and max_spread == "2.80" and driven_floor == "0.54" and llm_mode == "blend" and explore == "0.12":
+        return "Agresivo"
+    return "Custom"
+
+
 def get_next_trigger_info(
     *,
     events_csv_path: Path,
@@ -211,10 +228,23 @@ def main() -> None:
     apply_modern_theme("dark" if st.session_state.get("ui_dark_mode") else "light")
 
     st.markdown('<div id="theme-switch-anchor"></div>', unsafe_allow_html=True)
-    theme_col, _ = st.columns([2, 4])
-    with theme_col:
-        theme_label = "Tema actual: Oscuro (Luna)" if st.session_state.get("ui_dark_mode") else "Tema actual: Claro (Sol)"
-        st.toggle(theme_label, key="ui_dark_mode", help="Activa o desactiva el modo oscuro.")
+    theme_badge_class = "dark" if st.session_state.get("ui_dark_mode") else "light"
+    theme_badge_icon = "🌙" if st.session_state.get("ui_dark_mode") else "🌞"
+    st.markdown(
+        f'<div class="theme-chip {theme_badge_class}"><span class="icon">{theme_badge_icon}</span><span>Tema</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.toggle(
+        "Tema",
+        key="ui_dark_mode",
+        help="Alterna entre tema claro y oscuro.",
+        label_visibility="collapsed",
+    )
+    current_dark = bool(st.session_state.get("ui_dark_mode"))
+    persisted_dark = parse_bool(env_vals.get("UI_DARK_MODE"), False)
+    if current_dark != persisted_dark:
+        env_vals["UI_DARK_MODE"] = "true" if current_dark else "false"
+        save_env(env_vals)
 
     sem_min_signals = parse_int(env_vals.get("SEM_MIN_SIGNALS"), 8)
     sem_min_edge = parse_float(env_vals.get("SEM_MIN_EDGE"), 0.58)
@@ -241,6 +271,29 @@ def main() -> None:
     m1.metric("Modo de ejecución", "PAPER" if paper_mode else "LIVE")
     m2.metric("Símbolo", env_vals.get("SYMBOL", settings.symbol))
     m3.metric("Estrategia", strategy_mode)
+    runtime_preset = detect_runtime_preset(env_vals)
+    preset_icon = {
+        "Conservador": "🛡",
+        "Balanceado": "⚖",
+        "Agresivo": "⚡",
+        "Custom": "⚙",
+    }.get(runtime_preset, "⚙")
+    preset_style = {
+        "Conservador": "background:#e6f7ed;color:#1b5e20;border:1px solid #b7e1c3;",
+        "Balanceado": "background:#e8f1ff;color:#0d47a1;border:1px solid #bfd5ff;",
+        "Agresivo": "background:#fff3e0;color:#e65100;border:1px solid #ffd8a8;",
+        "Custom": "background:#f2f4f7;color:#334155;border:1px solid #d7dee7;",
+    }.get(runtime_preset, "background:#f2f4f7;color:#334155;border:1px solid #d7dee7;")
+    st.markdown(
+        f"""
+        <div style=\"margin-top:0.25rem;margin-bottom:0.5rem;\">
+            <span style=\"display:inline-block;padding:0.28rem 0.62rem;border-radius:999px;font-weight:600;font-size:0.86rem;{preset_style}\">
+                {preset_icon} Preset runtime activo: {runtime_preset}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if paper_mode:
         st.warning("Actualmente estás en PAPER mode. Cambia a LIVE en Configuración para operar real.")
     else:
@@ -877,6 +930,178 @@ def main() -> None:
             format="%.2f",
         )
         section_card(
+            "Runtime Agents",
+            "Activa o desactiva cada agente operativo del orquestador en tiempo real sin editar manualmente el .env.",
+        )
+        agent_runtime_enabled = st.selectbox(
+            "AGENT_RUNTIME_ENABLED",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("AGENT_RUNTIME_ENABLED"), True) else 1,
+        )
+        agent_runtime_strict = st.selectbox(
+            "AGENT_RUNTIME_STRICT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("AGENT_RUNTIME_STRICT"), True) else 1,
+            help="true = bloquea señales cuando un agente crítico falla validaciones; false = solo registra advertencias.",
+        )
+        agent_runtime_min_confidence = st.number_input(
+            "AGENT_RUNTIME_MIN_CONFIDENCE",
+            min_value=0.50,
+            max_value=0.98,
+            value=parse_float(env_vals.get("AGENT_RUNTIME_MIN_CONFIDENCE"), 0.55),
+            step=0.01,
+            format="%.2f",
+        )
+        agent_runtime_max_spread_pips = st.number_input(
+            "AGENT_RUNTIME_MAX_SPREAD_PIPS",
+            min_value=0.0,
+            max_value=20.0,
+            value=parse_float(env_vals.get("AGENT_RUNTIME_MAX_SPREAD_PIPS"), 2.2),
+            step=0.1,
+            format="%.2f",
+        )
+
+        st.markdown("**Toggles por agente**")
+        col_a1, col_a2, col_a3 = st.columns(3)
+        enable_strategy_architect_agent = col_a1.selectbox(
+            "ENABLE_STRATEGY_ARCHITECT_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_STRATEGY_ARCHITECT_AGENT"), True) else 1,
+        )
+        enable_market_data_agent = col_a2.selectbox(
+            "ENABLE_MARKET_DATA_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_MARKET_DATA_AGENT"), True) else 1,
+        )
+        enable_backtesting_agent = col_a3.selectbox(
+            "ENABLE_BACKTESTING_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_BACKTESTING_AGENT"), True) else 1,
+        )
+
+        col_b1, col_b2, col_b3 = st.columns(3)
+        enable_risk_manager_agent = col_b1.selectbox(
+            "ENABLE_RISK_MANAGER_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_RISK_MANAGER_AGENT"), True) else 1,
+        )
+        enable_optimizer_agent = col_b2.selectbox(
+            "ENABLE_OPTIMIZER_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_OPTIMIZER_AGENT"), True) else 1,
+        )
+        enable_llm_meta_agent = col_b3.selectbox(
+            "ENABLE_LLM_META_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_LLM_META_AGENT"), True) else 1,
+        )
+
+        col_c1, col_c2, col_c3 = st.columns(3)
+        enable_execution_agent = col_c1.selectbox(
+            "ENABLE_EXECUTION_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_EXECUTION_AGENT"), True) else 1,
+        )
+        enable_monitoring_agent = col_c2.selectbox(
+            "ENABLE_MONITORING_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_MONITORING_AGENT"), True) else 1,
+        )
+        enable_qa_agent = col_c3.selectbox(
+            "ENABLE_QA_AGENT",
+            options=["true", "false"],
+            index=0 if parse_bool(env_vals.get("ENABLE_QA_AGENT"), True) else 1,
+        )
+
+        section_card(
+            "Presets de Riesgo",
+            "Aplica perfiles de un clic para runtime agents y umbrales driven. Guarda en .env y recarga la UI.",
+        )
+        pcol1, pcol2, pcol3 = st.columns(3)
+        if pcol1.button("Aplicar Conservador"):
+            env_vals.update(
+                {
+                    "AGENT_RUNTIME_ENABLED": "true",
+                    "AGENT_RUNTIME_STRICT": "true",
+                    "AGENT_RUNTIME_MIN_CONFIDENCE": "0.62",
+                    "AGENT_RUNTIME_MAX_SPREAD_PIPS": "1.60",
+                    "ENABLE_STRATEGY_ARCHITECT_AGENT": "true",
+                    "ENABLE_MARKET_DATA_AGENT": "true",
+                    "ENABLE_BACKTESTING_AGENT": "true",
+                    "ENABLE_RISK_MANAGER_AGENT": "true",
+                    "ENABLE_OPTIMIZER_AGENT": "true",
+                    "ENABLE_LLM_META_AGENT": "true",
+                    "ENABLE_EXECUTION_AGENT": "true",
+                    "ENABLE_MONITORING_AGENT": "true",
+                    "ENABLE_QA_AGENT": "true",
+                    "DRIVEN_DECISION_THRESHOLD_FLOOR": "0.62",
+                    "DRIVEN_DECISION_THRESHOLD_CAP": "0.88",
+                    "DRIVEN_LLM_MODE": "confirm",
+                    "DRIVEN_LLM_MIN_CONFIDENCE": "0.70",
+                    "DRIVEN_MAX_SPREAD_PIPS": "1.80",
+                    "DRIVEN_EXPLORE_PROB": "0.03",
+                }
+            )
+            save_env(env_vals)
+            st.success("Preset Conservador aplicado en .env")
+            st.rerun()
+
+        if pcol2.button("Aplicar Balanceado"):
+            env_vals.update(
+                {
+                    "AGENT_RUNTIME_ENABLED": "true",
+                    "AGENT_RUNTIME_STRICT": "true",
+                    "AGENT_RUNTIME_MIN_CONFIDENCE": "0.55",
+                    "AGENT_RUNTIME_MAX_SPREAD_PIPS": "2.20",
+                    "ENABLE_STRATEGY_ARCHITECT_AGENT": "true",
+                    "ENABLE_MARKET_DATA_AGENT": "true",
+                    "ENABLE_BACKTESTING_AGENT": "true",
+                    "ENABLE_RISK_MANAGER_AGENT": "true",
+                    "ENABLE_OPTIMIZER_AGENT": "true",
+                    "ENABLE_LLM_META_AGENT": "true",
+                    "ENABLE_EXECUTION_AGENT": "true",
+                    "ENABLE_MONITORING_AGENT": "true",
+                    "ENABLE_QA_AGENT": "true",
+                    "DRIVEN_DECISION_THRESHOLD_FLOOR": "0.55",
+                    "DRIVEN_DECISION_THRESHOLD_CAP": "0.82",
+                    "DRIVEN_LLM_MODE": "confirm",
+                    "DRIVEN_LLM_MIN_CONFIDENCE": "0.62",
+                    "DRIVEN_MAX_SPREAD_PIPS": "2.20",
+                    "DRIVEN_EXPLORE_PROB": "0.05",
+                }
+            )
+            save_env(env_vals)
+            st.success("Preset Balanceado aplicado en .env")
+            st.rerun()
+
+        if pcol3.button("Aplicar Agresivo"):
+            env_vals.update(
+                {
+                    "AGENT_RUNTIME_ENABLED": "true",
+                    "AGENT_RUNTIME_STRICT": "false",
+                    "AGENT_RUNTIME_MIN_CONFIDENCE": "0.52",
+                    "AGENT_RUNTIME_MAX_SPREAD_PIPS": "2.80",
+                    "ENABLE_STRATEGY_ARCHITECT_AGENT": "true",
+                    "ENABLE_MARKET_DATA_AGENT": "true",
+                    "ENABLE_BACKTESTING_AGENT": "true",
+                    "ENABLE_RISK_MANAGER_AGENT": "true",
+                    "ENABLE_OPTIMIZER_AGENT": "true",
+                    "ENABLE_LLM_META_AGENT": "true",
+                    "ENABLE_EXECUTION_AGENT": "true",
+                    "ENABLE_MONITORING_AGENT": "true",
+                    "ENABLE_QA_AGENT": "true",
+                    "DRIVEN_DECISION_THRESHOLD_FLOOR": "0.54",
+                    "DRIVEN_DECISION_THRESHOLD_CAP": "0.78",
+                    "DRIVEN_LLM_MODE": "blend",
+                    "DRIVEN_LLM_MIN_CONFIDENCE": "0.58",
+                    "DRIVEN_MAX_SPREAD_PIPS": "2.80",
+                    "DRIVEN_EXPLORE_PROB": "0.12",
+                }
+            )
+            save_env(env_vals)
+            st.success("Preset Agresivo aplicado en .env")
+            st.rerun()
+        section_card(
             "Fundamental + LLM",
             "Analiza titulares macro/economicos de fuentes RSS y consulta un LLM para decidir BUY/SELL/HOLD sobre cualquier simbolo (forex, commodities, indices/futuros, acciones).",
         )
@@ -1051,6 +1276,19 @@ def main() -> None:
             env_vals["DRIVEN_LLM_MODE"] = str(driven_llm_mode).strip().lower() or "confirm"
             env_vals["DRIVEN_LLM_MIN_CONFIDENCE"] = f"{float(driven_llm_min_confidence):.2f}"
             env_vals["DRIVEN_LLM_VETO_GAP"] = f"{float(driven_llm_veto_gap):.2f}"
+            env_vals["AGENT_RUNTIME_ENABLED"] = agent_runtime_enabled
+            env_vals["AGENT_RUNTIME_STRICT"] = agent_runtime_strict
+            env_vals["AGENT_RUNTIME_MIN_CONFIDENCE"] = f"{float(agent_runtime_min_confidence):.2f}"
+            env_vals["AGENT_RUNTIME_MAX_SPREAD_PIPS"] = f"{float(agent_runtime_max_spread_pips):.2f}"
+            env_vals["ENABLE_STRATEGY_ARCHITECT_AGENT"] = enable_strategy_architect_agent
+            env_vals["ENABLE_MARKET_DATA_AGENT"] = enable_market_data_agent
+            env_vals["ENABLE_BACKTESTING_AGENT"] = enable_backtesting_agent
+            env_vals["ENABLE_RISK_MANAGER_AGENT"] = enable_risk_manager_agent
+            env_vals["ENABLE_OPTIMIZER_AGENT"] = enable_optimizer_agent
+            env_vals["ENABLE_LLM_META_AGENT"] = enable_llm_meta_agent
+            env_vals["ENABLE_EXECUTION_AGENT"] = enable_execution_agent
+            env_vals["ENABLE_MONITORING_AGENT"] = enable_monitoring_agent
+            env_vals["ENABLE_QA_AGENT"] = enable_qa_agent
             env_vals["FUNDAMENTAL_NEWS_SOURCES"] = str(fundamental_news_sources).replace("\n", ",").strip()
             env_vals["FUNDAMENTAL_NEWS_LOOKBACK_MINUTES"] = str(int(fundamental_lookback_minutes))
             env_vals["FUNDAMENTAL_MAX_HEADLINES"] = str(int(fundamental_max_headlines))

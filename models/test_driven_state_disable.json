@@ -1,0 +1,54 @@
+{
+  "weights": {
+    "ema_rsi": 1.0,
+    "donchian": 0.8500000000001016,
+    "turtle_atr": 1.0,
+    "zscore": 1.0,
+    "momentum": 1.0,
+    "default": 1.0
+  },
+  "stats": {
+    "ema_rsi": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "avg_reward": 0.0,
+      "disable_until": ""
+    },
+    "donchian": {
+      "trades": 5,
+      "wins": 1,
+      "losses": 4,
+      "avg_reward": -0.35999999999986465,
+      "disable_until": "2026-03-01T10:30:00+00:00"
+    },
+    "turtle_atr": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "avg_reward": 0.0,
+      "disable_until": ""
+    },
+    "zscore": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "avg_reward": 0.0,
+      "disable_until": ""
+    },
+    "momentum": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "avg_reward": 0.0,
+      "disable_until": ""
+    },
+    "default": {
+      "trades": 0,
+      "wins": 0,
+      "losses": 0,
+      "avg_reward": 0.0,
+      "disable_until": ""
+    }
+  }
+}

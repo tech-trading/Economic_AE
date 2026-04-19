@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Iterable
 from datetime import timedelta, timezone
 from pathlib import Path
 
@@ -179,14 +180,68 @@ def _is_pid_running(pid: int) -> bool:
         return False
 
 
-def get_live_bot_pid(live_pid_path: Path) -> int | None:
-    if not live_pid_path.exists():
-        return None
+def _iter_windows_src_main_pids(project_root: Path) -> Iterable[int]:
+    if os.name != "nt":
+        return []
+
+    project_marker = str(project_root).lower().replace("/", "\\")
+    cmd = (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'src.main' } | "
+        "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+    )
+
     try:
-        pid = int(live_pid_path.read_text(encoding="utf-8").strip())
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        raw = (out.stdout or "").strip()
+        if not raw:
+            return []
+
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else [data]
+        pids: list[int] = []
+        for row in rows:
+            cmdline = str(row.get("CommandLine") or "").lower().replace("/", "\\")
+            pid = int(row.get("ProcessId") or 0)
+            if pid > 0 and project_marker in cmdline and "-m src.main" in cmdline:
+                pids.append(pid)
+        return sorted(set(pids), reverse=True)
     except Exception:
-        return None
-    return pid if _is_pid_running(pid) else None
+        return []
+
+
+def get_live_bot_pid(live_pid_path: Path) -> int | None:
+    project_root = live_pid_path.parent.parent
+    if live_pid_path.exists():
+        try:
+            pid = int(live_pid_path.read_text(encoding="utf-8").strip())
+        except Exception:
+            pid = -1
+        if _is_pid_running(pid):
+            return pid
+
+    # Fallback: if PID file is stale/missing, discover a running src.main process
+    # launched from this project and self-heal live_bot.pid.
+    discovered = next(iter(_iter_windows_src_main_pids(project_root)), None)
+    if discovered:
+        try:
+            live_pid_path.parent.mkdir(parents=True, exist_ok=True)
+            live_pid_path.write_text(str(discovered), encoding="utf-8")
+        except Exception:
+            pass
+        return discovered
+
+    if live_pid_path.exists():
+        try:
+            live_pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return None
 
 
 def start_live_bot_process(project_root: Path, live_pid_path: Path) -> tuple[bool, str]:
@@ -448,14 +503,29 @@ def render_live_status_panel(
     mins_since_last = float((now_utc - last_ts).total_seconds() / 60.0)
     has_recent_heartbeat = mins_since_last <= float(heartbeat_minutes)
     has_recent_no_money = (mins_since_no_money is not None) and (mins_since_no_money <= float(heartbeat_minutes) * 2.0)
-    has_calendar_error = bool(recent["action"].astype(str).eq("calendar_refresh_error").any()) if not recent.empty else False
     has_recent_refresh = bool(recent["action"].astype(str).eq("calendar_refresh").any()) if not recent.empty else False
+    recent_errors = recent[recent["action"].astype(str).eq("calendar_refresh_error")].copy() if not recent.empty else pd.DataFrame()
+    recent_refreshes = recent[recent["action"].astype(str).eq("calendar_refresh")].copy() if not recent.empty else pd.DataFrame()
+
+    last_error_ts = recent_errors["time_utc"].max() if not recent_errors.empty else pd.NaT
+    last_refresh_ts = recent_refreshes["time_utc"].max() if not recent_refreshes.empty else pd.NaT
+    error_age_minutes = (
+        float((now_utc - last_error_ts).total_seconds() / 60.0)
+        if pd.notna(last_error_ts)
+        else None
+    )
+    has_recent_calendar_error = bool(
+        pd.notna(last_error_ts)
+        and (error_age_minutes is not None)
+        and (error_age_minutes <= float(heartbeat_minutes) * 2.0)
+        and (pd.isna(last_refresh_ts) or (last_error_ts >= last_refresh_ts))
+    )
     only_no_events = bool(
         (not recent.empty)
         and recent["action"].astype(str).isin(["calendar_refresh", "no_upcoming_events"]).all()
     )
 
-    if (live_pid is not None) and has_recent_heartbeat and has_recent_refresh and (not has_calendar_error):
+    if (live_pid is not None) and has_recent_heartbeat and has_recent_refresh and (not has_recent_calendar_error):
         health_state = "VERDE"
         health_msg = "Bot activo y refrescando calendario con normalidad."
         st.success(f"Semáforo LIVE: {health_state} | {health_msg}")
@@ -472,13 +542,23 @@ def render_live_status_panel(
         if live_pid is None:
             health_msg = "Bot detenido o sin PID válido."
         else:
-            health_msg = "Actividad estancada o error de calendario. Revisar conectividad/fuente de eventos."
+            health_msg = "Actividad estancada o error de calendario reciente. Revisar conectividad/fuente de eventos."
         st.error(f"Semáforo LIVE: {health_state} | {health_msg}")
 
     s1, s2, s3 = st.columns(3)
     s1.metric("Estado", health_state)
     s2.metric("Min desde última actividad", f"{mins_since_last:.1f}")
     s3.metric("Errores calendar 24h", int(recent["action"].astype(str).eq("calendar_refresh_error").sum()) if not recent.empty else 0)
+
+    if pd.notna(last_error_ts):
+        age_txt = "N/A" if error_age_minutes is None else f"{error_age_minutes:.1f}m"
+        if pd.notna(last_refresh_ts) and (last_refresh_ts > last_error_ts):
+            st.caption(
+                f"Último calendar_refresh_error: {last_error_ts} (hace {age_txt}) | "
+                f"recuperado con calendar_refresh posterior: {last_refresh_ts}"
+            )
+        else:
+            st.caption(f"Último calendar_refresh_error: {last_error_ts} (hace {age_txt})")
 
     st.markdown("#### Acciones últimas 24h")
     if recent.empty:

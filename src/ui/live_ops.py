@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Iterable
 from datetime import timedelta, timezone
 from pathlib import Path
@@ -272,8 +273,29 @@ def start_live_bot_process(project_root: Path, live_pid_path: Path) -> tuple[boo
             stderr=subprocess.DEVNULL,
             creationflags=creation_flags,
         )
-        live_pid_path.write_text(str(proc.pid), encoding="utf-8")
-        return True, f"Bot LIVE iniciado (PID {proc.pid})."
+
+        # IMPORTANT:
+        # src.main is the owner of logs/live_bot.pid (singleton lock).
+        # If UI writes that PID file first, src.main can read its own PID as
+        # "already running" and exit immediately. So we never pre-write it here.
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            discovered_pid = get_live_bot_pid(live_pid_path)
+            if discovered_pid:
+                return True, f"Bot LIVE iniciado (PID {discovered_pid})."
+
+            if proc.poll() is not None:
+                return False, "El proceso LIVE terminó al iniciar. Revisa configuración/credenciales MT5 y logs."
+
+            time.sleep(0.10)
+
+        if proc.poll() is None:
+            return True, (
+                f"Inicio LIVE enviado (PID {proc.pid}). Esperando confirmación de lock/PID; "
+                "actualiza el panel en unos segundos."
+            )
+        return False, "No se pudo confirmar inicio LIVE: el proceso terminó inmediatamente."
     except Exception as ex:
         return False, f"No se pudo iniciar el bot LIVE: {ex}"
 

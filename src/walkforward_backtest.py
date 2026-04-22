@@ -43,6 +43,19 @@ def _simulate(y_true: np.ndarray, probs: np.ndarray, threshold: float, no_trade_
     }
 
 
+def _infer_session_from_hours(hours: pd.Series) -> str:
+    if hours.empty:
+        return "unknown"
+    h = int(hours.mode(dropna=True).iloc[0]) if not hours.mode(dropna=True).empty else int(hours.iloc[0])
+    if 0 <= h < 6:
+        return "asia"
+    if 6 <= h < 12:
+        return "london"
+    if 12 <= h < 18:
+        return "newyork"
+    return "afterhours"
+
+
 def main() -> None:
     events = pd.read_csv(settings.events_csv)
     market = pd.read_csv(settings.market_csv)
@@ -77,6 +90,7 @@ def main() -> None:
         use_sequential_fallback = True
 
     rows = []
+    session_rows = []
     all_trades = []
 
     if use_sequential_fallback:
@@ -96,6 +110,7 @@ def main() -> None:
 
             _append_period_result(
                 rows,
+                session_rows,
                 all_trades,
                 f"seq_split_{i}",
                 "split",
@@ -104,6 +119,7 @@ def main() -> None:
                 X,
                 X_seq,
                 y,
+                times,
             )
     else:
         for period in unique_periods[1:]:
@@ -112,6 +128,7 @@ def main() -> None:
 
             _append_period_result(
                 rows,
+                session_rows,
                 all_trades,
                 period,
                 period_label,
@@ -120,12 +137,18 @@ def main() -> None:
                 X,
                 X_seq,
                 y,
+                times,
             )
 
     os.makedirs(settings.model_dir, exist_ok=True)
     report_df = pd.DataFrame(rows)
     report_path = os.path.join(settings.model_dir, "walkforward_monthly_report.csv")
     report_df.to_csv(report_path, index=False)
+
+    if session_rows:
+        session_df = pd.DataFrame(session_rows)
+        session_path = os.path.join(settings.model_dir, "walkforward_session_report.csv")
+        session_df.to_csv(session_path, index=False)
 
     if not rows:
         summary = {
@@ -176,6 +199,7 @@ def main() -> None:
 
 def _append_period_result(
     rows: list[dict],
+    session_rows: list[dict],
     all_trades: list[int],
     period_value: str,
     period_key: str,
@@ -184,6 +208,7 @@ def _append_period_result(
     X: np.ndarray,
     X_seq: np.ndarray,
     y: np.ndarray,
+    times: pd.Series,
 ) -> None:
     if train_mask.sum() < 30 or test_mask.sum() < 10:
         return
@@ -227,6 +252,32 @@ def _append_period_result(
             **metrics,
         }
     )
+
+    # Session diagnostics for 24/7 operations
+    test_idx = np.where(test_mask)[0]
+    if test_idx.size > 0:
+        sessions = []
+        for idx in test_idx:
+            try:
+                ts = pd.to_datetime(times.iloc[idx], utc=True, errors="coerce")
+                if pd.notna(ts):
+                    sessions.append(int(ts.hour))
+            except Exception:
+                continue
+        session_name = _infer_session_from_hours(pd.Series(sessions, dtype=int))
+        session_rows.append(
+            {
+                period_key: period_value,
+                "session": session_name,
+                "test_samples": int(test_mask.sum()),
+                "threshold": float(policy["decision_threshold"]),
+                "no_trade_band": float(policy["no_trade_band"]),
+                "num_trades": float(metrics["num_trades"]),
+                "hit_rate": float(metrics["hit_rate"]),
+                "avg_r": float(metrics["avg_r"]),
+                "max_drawdown_r": float(metrics["max_drawdown_r"]),
+            }
+        )
 
     for y_i, p_i in zip(y_test, probs_test):
         if abs(p_i - 0.5) < policy["no_trade_band"]:

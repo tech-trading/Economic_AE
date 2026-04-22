@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from src.calendar_sources import fetch_and_store_events
+from src.calendar_sources import fetch_and_store_events, scrape_public_calendars
 from src.config import settings
 from src.feature_engineering import build_event_dataset
 from src.models import ensemble_predict_proba, load_artifacts
@@ -217,8 +217,22 @@ class LiveTrader:
                 self._log_activity(action="calendar_refresh", detail=f"events={len(events)}")
             return events
         except Exception as ex:
-            print(f"Calendar refresh failed: {ex}")
-            self._log_activity(action="calendar_refresh_error", detail=str(ex)[:200])
+            raw_msg = str(ex)
+            msg_l = raw_msg.lower()
+            if "nameresolutionerror" in msg_l or "getaddrinfo failed" in msg_l or "failed to resolve" in msg_l:
+                try:
+                    cached_scrape = scrape_public_calendars(days_ahead=7)
+                    if not cached_scrape.empty:
+                        friendly = f"calendar_dns_error_fallback_ok events={len(cached_scrape)}"
+                        self._log_activity(action="calendar_refresh_fallback", detail=friendly)
+                        return cached_scrape
+                except Exception:
+                    pass
+                friendly = "calendar_source_dns_error: no se pudo resolver tradingeconomics.com; mantiene cache local"
+            else:
+                friendly = raw_msg[:200]
+            print(f"Calendar refresh failed: {friendly}")
+            self._log_activity(action="calendar_refresh_error", detail=friendly)
             return pd.DataFrame()
 
     def _log_activity(self, action: str, event_id: str | None = None, detail: str = "", symbol: str | None = None) -> None:
@@ -275,7 +289,23 @@ class LiveTrader:
         if isinstance(llm, dict) and llm:
             llm_txt = f"llm_used={llm.get('llm_used', False)};llm_side={llm.get('llm_side', '')};llm_conf={float(llm.get('llm_confidence', 0.0)):.2f}"
 
-        suffix_parts = [x for x in [f"top_agents={top_agents_txt}" if top_agents_txt else "", llm_txt] if x]
+        reject_reason = str(st.get("last_reject_reason", "")).strip()
+        reject_txt = f"reject_reason={reject_reason}" if reject_reason else ""
+        regime = str(st.get("regime", "")).strip()
+        regime_txt = f"regime={regime}" if regime else ""
+        scores = st.get("scores", [])
+        scores_txt = ""
+        if isinstance(scores, list) and scores:
+            packed = []
+            for row in scores[:2]:
+                try:
+                    packed.append(f"{row.get('agent')}:{float(row.get('score', 0.0)):.2f}")
+                except Exception:
+                    continue
+            if packed:
+                scores_txt = f"scores={','.join(packed)}"
+
+        suffix_parts = [x for x in [f"top_agents={top_agents_txt}" if top_agents_txt else "", llm_txt, reject_txt, regime_txt, scores_txt] if x]
         runtime_note = self.agent_runtime.status_note()
         if runtime_note:
             suffix_parts.append(f"runtime={runtime_note}")

@@ -9,6 +9,8 @@ import re
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from src.config import settings
 
@@ -133,24 +135,208 @@ def fetch_and_store_events(days_ahead: int = 14) -> pd.DataFrame:
         client = TradingEconomicsCalendarClient(te_key, settings.te_base_url)
         events = client.fetch_events(now_utc, end_utc)
     else:
-        local_now = now_utc.astimezone(settings.local_tz)
-        daily_frames = []
-        for i in range(max(days_ahead, 1)):
-            target_local_day = local_now + timedelta(days=i)
-            day_events = scrape_tradingeconomics_calendar_day(target_local_day)
-            if not day_events.empty:
-                daily_frames.append(day_events)
-
-        events = pd.concat(daily_frames, ignore_index=True) if daily_frames else pd.DataFrame()
+        events = scrape_public_calendars(days_ahead=max(days_ahead, 1))
 
     events = filter_relevant_events(events, settings.symbol, min_importance=settings.event_min_importance)
 
     if not events.empty:
         _append_unique_events(events, settings.events_csv)
     else:
+        cached = _load_cached_events(settings.events_csv, now_utc)
+        if not cached.empty:
+            return filter_relevant_events(cached, settings.symbol, min_importance=settings.event_min_importance)
         _ensure_events_file(settings.events_csv)
 
     return events
+
+
+def scrape_public_calendars(days_ahead: int = 14, start_day_local: datetime | None = None) -> pd.DataFrame:
+    # Primary source
+    try:
+        events = scrape_tradingeconomics_calendar(days_ahead=days_ahead, start_day_local=start_day_local)
+    except Exception:
+        events = pd.DataFrame()
+    if not events.empty:
+        return events
+
+    # Fallback 1: Investing.com economic calendar page
+    try:
+        events = scrape_investing_calendar(days_ahead=days_ahead, start_day_local=start_day_local)
+    except Exception:
+        events = pd.DataFrame()
+    if not events.empty:
+        return events
+
+    # Fallback 2: FXStreet economic calendar page
+    try:
+        events = scrape_fxstreet_calendar(days_ahead=days_ahead, start_day_local=start_day_local)
+    except Exception:
+        events = pd.DataFrame()
+    return events
+
+
+def scrape_tradingeconomics_calendar(days_ahead: int = 14, start_day_local: datetime | None = None) -> pd.DataFrame:
+    local_start = (start_day_local or datetime.now(settings.local_tz)).date()
+    local_end = local_start + timedelta(days=max(1, days_ahead))
+
+    url = "https://tradingeconomics.com/calendar"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+    }
+    response = _calendar_get(url=url, headers=headers)
+    tables = pd.read_html(StringIO(response.text))
+    if not tables:
+        return pd.DataFrame()
+
+    table = _pick_calendar_table(tables)
+    if table is None or table.empty:
+        return pd.DataFrame()
+
+    df = _normalize_scraped_calendar(table, local_start)
+    if df.empty:
+        return df
+
+    # Keep only the requested local date window.
+    local_ts = pd.to_datetime(df["date_utc"], utc=True, errors="coerce").dt.tz_convert(settings.local_tz)
+    mask = (local_ts.dt.date >= local_start) & (local_ts.dt.date <= local_end)
+    return df[mask].sort_values("date_utc").reset_index(drop=True)
+
+
+def scrape_investing_calendar(days_ahead: int = 14, start_day_local: datetime | None = None) -> pd.DataFrame:
+    local_start = (start_day_local or datetime.now(settings.local_tz)).date()
+    local_end = local_start + timedelta(days=max(1, days_ahead))
+
+    url = "https://www.investing.com/economic-calendar/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.investing.com/",
+    }
+    response = _calendar_get(url=url, headers=headers)
+    tables = pd.read_html(StringIO(response.text))
+    return _normalize_generic_calendar_tables(
+        tables=tables,
+        source="investing",
+        local_start=local_start,
+        local_end=local_end,
+    )
+
+
+def scrape_fxstreet_calendar(days_ahead: int = 14, start_day_local: datetime | None = None) -> pd.DataFrame:
+    local_start = (start_day_local or datetime.now(settings.local_tz)).date()
+    local_end = local_start + timedelta(days=max(1, days_ahead))
+
+    url = "https://www.fxstreet.com/economic-calendar"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.fxstreet.com/",
+    }
+    response = _calendar_get(url=url, headers=headers)
+    tables = pd.read_html(StringIO(response.text))
+    return _normalize_generic_calendar_tables(
+        tables=tables,
+        source="fxstreet",
+        local_start=local_start,
+        local_end=local_end,
+    )
+
+
+def _normalize_generic_calendar_tables(
+    tables: list[pd.DataFrame],
+    source: str,
+    local_start,
+    local_end,
+) -> pd.DataFrame:
+    if not tables:
+        return pd.DataFrame()
+
+    out_rows: list[dict] = []
+    for table in tables:
+        if table is None or table.empty or table.shape[1] < 3:
+            continue
+
+        cols = [str(c).strip() for c in table.columns]
+        cols_map = {str(c).lower(): c for c in cols}
+        date_col = _find_col(cols_map, ["date", "day", "fecha", "dia"])
+        time_col = _find_col(cols_map, ["time", "hora"])
+        event_col = _find_col(cols_map, ["event", "release", "title", "headline", "actual event"])
+        ccy_col = _find_col(cols_map, ["currency", "curr", "country", "moneda", "pais"])
+        impact_col = _find_col(cols_map, ["impact", "importance", "volatility", "importancia"])
+        forecast_col = _find_col(cols_map, ["forecast", "consensus", "estimado"])
+        previous_col = _find_col(cols_map, ["previous", "prior", "previo", "anterior"])
+        actual_col = _find_col(cols_map, ["actual", "real"])
+
+        if event_col is None or ccy_col is None:
+            continue
+
+        current_day = local_start
+        for _, row in table.iterrows():
+            name = str(row.get(event_col, "")).strip()
+            if not name or name.lower() in {"nan", "none"}:
+                continue
+
+            if date_col is not None:
+                raw_date = str(row.get(date_col, "")).strip()
+                parsed_date = pd.to_datetime(raw_date, errors="coerce")
+                if not pd.isna(parsed_date):
+                    current_day = parsed_date.date()
+
+            t_raw = str(row.get(time_col, "")).strip() if time_col is not None else ""
+            dt = _parse_scraped_time(t_raw, current_day)
+            if dt is None:
+                continue
+
+            dt_local = dt.astimezone(settings.local_tz)
+            if dt_local.date() < local_start or dt_local.date() > local_end:
+                continue
+
+            ccy_raw = str(row.get(ccy_col, "")).strip().upper()
+            currency = ccy_raw if len(ccy_raw) == 3 and ccy_raw.isalpha() else _country_to_currency(ccy_raw)
+            if not currency:
+                continue
+
+            importance = _normalize_importance(row.get(impact_col)) if impact_col is not None else 2
+            event_id = hashlib.md5(f"{source}|{dt.isoformat()}|{currency}|{name}".encode("utf-8")).hexdigest()[:16]
+            out_rows.append(
+                {
+                    "event_id": event_id,
+                    "date_utc": pd.Timestamp(dt),
+                    "country": ccy_raw,
+                    "currency": currency,
+                    "name": name,
+                    "importance": int(importance),
+                    "forecast": _to_float(row.get(forecast_col)) if forecast_col is not None else None,
+                    "previous": _to_float(row.get(previous_col)) if previous_col is not None else None,
+                    "actual": _to_float(row.get(actual_col)) if actual_col is not None else None,
+                }
+            )
+
+    if not out_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(out_rows)
+    return df.drop_duplicates(subset=["event_id"]).sort_values("date_utc").reset_index(drop=True)
+
+
+def _load_cached_events(path: str, now_utc: datetime) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+    if df.empty or "date_utc" not in df.columns:
+        return pd.DataFrame()
+
+    df["date_utc"] = pd.to_datetime(df["date_utc"], utc=True, errors="coerce")
+    df = df[df["date_utc"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    return df[df["date_utc"] >= pd.Timestamp(now_utc)].sort_values("date_utc").reset_index(drop=True)
 
 
 def scrape_tradingeconomics_calendar_day(target_day_local: datetime | None = None) -> pd.DataFrame:
@@ -161,8 +347,7 @@ def scrape_tradingeconomics_calendar_day(target_day_local: datetime | None = Non
         "(KHTML, like Gecko) Chrome/123.0 Safari/537.36"
     }
 
-    response = requests.get(url, headers=headers, timeout=30)
-    response.raise_for_status()
+    response = _calendar_get(url=url, headers=headers)
 
     tables = pd.read_html(StringIO(response.text))
     if not tables:
@@ -177,6 +362,24 @@ def scrape_tradingeconomics_calendar_day(target_day_local: datetime | None = Non
         return df
 
     return df.sort_values("date_utc").reset_index(drop=True)
+
+
+def _calendar_get(url: str, headers: dict[str, str]) -> requests.Response:
+    session = requests.Session()
+    retries = Retry(
+        total=2,
+        connect=2,
+        read=2,
+        backoff_factor=0.6,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    resp = session.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    return resp
 
 
 def _pick_calendar_table(tables: list[pd.DataFrame]) -> pd.DataFrame | None:
@@ -329,6 +532,23 @@ def _normalize_importance(value: object) -> int:
         return 2
     if text in {"high", "3"}:
         return 3
+
+    # Common web labels/symbols.
+    if "bull" in text:
+        bulls = text.count("bull")
+        if bulls >= 3:
+            return 3
+        if bulls == 2:
+            return 2
+        if bulls == 1:
+            return 1
+    stars = text.count("*")
+    if stars >= 3:
+        return 3
+    if stars == 2:
+        return 2
+    if stars == 1:
+        return 1
 
     return 0
 

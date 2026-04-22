@@ -164,6 +164,16 @@ class Settings:
     driven_llm_mode: str = os.getenv("DRIVEN_LLM_MODE", "confirm")  # options: confirm, blend, off
     driven_llm_min_confidence: float = float(os.getenv("DRIVEN_LLM_MIN_CONFIDENCE", "0.62"))
     driven_llm_veto_gap: float = float(os.getenv("DRIVEN_LLM_VETO_GAP", "0.08"))
+    driven_no_signal_relax_seconds: int = int(os.getenv("DRIVEN_NO_SIGNAL_RELAX_SECONDS", "900"))
+    driven_max_relaxation: float = float(os.getenv("DRIVEN_MAX_RELAXATION", "0.10"))
+    driven_score_weight_edge: float = float(os.getenv("DRIVEN_SCORE_WEIGHT_EDGE", "0.30"))
+    driven_score_weight_confidence: float = float(os.getenv("DRIVEN_SCORE_WEIGHT_CONFIDENCE", "0.28"))
+    driven_score_weight_perf: float = float(os.getenv("DRIVEN_SCORE_WEIGHT_PERF", "0.18"))
+    driven_score_weight_stability: float = float(os.getenv("DRIVEN_SCORE_WEIGHT_STABILITY", "0.14"))
+    driven_score_weight_diversification: float = float(os.getenv("DRIVEN_SCORE_WEIGHT_DIVERSIFICATION", "0.10"))
+    driven_regime_vol_low_pips: float = float(os.getenv("DRIVEN_REGIME_VOL_LOW_PIPS", "0.09"))
+    driven_regime_vol_high_pips: float = float(os.getenv("DRIVEN_REGIME_VOL_HIGH_PIPS", "0.45"))
+    driven_regime_trend_strength_pips: float = float(os.getenv("DRIVEN_REGIME_TREND_STRENGTH_PIPS", "1.8"))
 
     # Runtime agent framework (agents/trading/*.md)
     agent_runtime_enabled: bool = os.getenv("AGENT_RUNTIME_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}

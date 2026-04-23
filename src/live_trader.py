@@ -288,6 +288,9 @@ class LiveTrader:
         llm_txt = ""
         if isinstance(llm, dict) and llm:
             llm_txt = f"llm_used={llm.get('llm_used', False)};llm_side={llm.get('llm_side', '')};llm_conf={float(llm.get('llm_confidence', 0.0)):.2f}"
+            ep = llm.get("exit_profile", {}) if isinstance(llm, dict) else {}
+            if isinstance(ep, dict) and ep:
+                llm_txt = llm_txt + f";tp={ep.get('tp_pips', '')};trail={ep.get('trail_pips', '')};ta={ep.get('trail_activation_pips', '')}"
 
         reject_reason = str(st.get("last_reject_reason", "")).strip()
         reject_txt = f"reject_reason={reject_reason}" if reject_reason else ""
@@ -380,6 +383,12 @@ class LiveTrader:
     def _build_decision(self, event_row: pd.Series, symbol: str) -> TradeDecision | None:
         ticks = self.executor.get_recent_ticks(symbol, seconds=settings.lookback_seconds + 120)
         if ticks.empty:
+            self._log_activity(
+                action="skip_no_ticks",
+                event_id=str(event_row.get("event_id", "")) if isinstance(event_row, pd.Series) else "",
+                detail=f"symbol={symbol}",
+                symbol=symbol,
+            )
             return None
 
         pre_v = self.agent_runtime.pre_decision(

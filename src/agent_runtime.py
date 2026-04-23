@@ -59,9 +59,19 @@ class TradingAgentRuntime:
             return 0.0
         pip = self._pip_size(symbol)
         try:
-            return float((float(ticks["ask"].iat[-1]) - float(ticks["bid"].iat[-1])) / max(1e-12, pip))
+            ask = float(ticks["ask"].iat[-1])
+            bid = float(ticks["bid"].iat[-1])
+            if ask <= 0 or bid <= 0 or ask < bid:
+                return float("inf")
+            spread = float((ask - bid) / max(1e-12, pip))
+            if not np.isfinite(spread):
+                return float("inf")
+            # Ignore clearly corrupted snapshots (rare MT5 zeros/spikes).
+            if spread > 100.0:
+                return float("inf")
+            return spread
         except Exception:
-            return 0.0
+            return float("inf")
 
     def status_note(self) -> str:
         if not self._last_notes:

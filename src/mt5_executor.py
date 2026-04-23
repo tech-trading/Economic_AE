@@ -15,6 +15,9 @@ class TradeDecision:
     side: str
     confidence: float
     proba_buy: float = 0.5
+    tp_pips_override: float | None = None
+    trailing_stop_pips_override: float | None = None
+    trailing_activation_pips_override: float | None = None
 
 
 class MT5Executor:
@@ -45,13 +48,22 @@ class MT5Executor:
         utc_to = datetime.now(timezone.utc)
         utc_from = utc_to - pd.Timedelta(seconds=seconds)
 
-        ticks = mt5.copy_ticks_range(symbol, utc_from, utc_to, mt5.COPY_TICKS_ALL)
+        ticks = mt5.copy_ticks_range(symbol, utc_from, utc_to, mt5.COPY_TICKS_INFO)
+        if ticks is None or len(ticks) == 0:
+            ticks = mt5.copy_ticks_range(symbol, utc_from, utc_to, mt5.COPY_TICKS_ALL)
         if ticks is None or len(ticks) == 0:
             return pd.DataFrame(columns=["time_utc", "bid", "ask"])
 
         df = pd.DataFrame(ticks)
         df["time_utc"] = pd.to_datetime(df["time"], unit="s", utc=True)
-        return df[["time_utc", "bid", "ask"]].copy()
+        out = df[["time_utc", "bid", "ask"]].copy()
+        out["bid"] = pd.to_numeric(out["bid"], errors="coerce")
+        out["ask"] = pd.to_numeric(out["ask"], errors="coerce")
+        out = out.dropna(subset=["time_utc", "bid", "ask"])
+        out = out[(out["bid"] > 0.0) & (out["ask"] > 0.0) & (out["ask"] >= out["bid"])]
+        if out.empty:
+            return pd.DataFrame(columns=["time_utc", "bid", "ask"])
+        return out.sort_values("time_utc").reset_index(drop=True)
 
     def is_symbol_tradeable(self, symbol: str) -> bool:
         sym = str(symbol or "").strip()
@@ -91,13 +103,44 @@ class MT5Executor:
         sl_pips_cfg = float(settings.stop_loss_pips)
         tp_pips_cfg = float(settings.take_profit_pips)
         sl_pips = max(sl_pips_cfg, spread_pips * float(getattr(settings, "min_sl_spread_multiplier", 3.0)))
-        tp_pips = max(tp_pips_cfg, sl_pips * float(getattr(settings, "min_tp_sl_ratio_enforced", 1.6)))
+        tp_override = float(getattr(decision, "tp_pips_override", 0.0) or 0.0)
+
+        tp_mode = str(getattr(settings, "take_profit_mode", "adaptive")).strip().lower()
+        if tp_override > 0.0:
+            tp_pips = tp_override
+            ratio_floor = float(max(0.0, getattr(settings, "tp_sl_ratio_floor", 0.0)))
+            if ratio_floor > 0.0:
+                tp_pips = max(tp_pips, sl_pips * ratio_floor)
+            tp_pips = float(np.clip(tp_pips, float(getattr(settings, "take_profit_min_pips", 2.0)), float(getattr(settings, "take_profit_max_pips", 20.0))))
+        elif tp_mode == "adaptive":
+            tp_pips = self._adaptive_take_profit_pips(
+                symbol=symbol,
+                decision=decision,
+                sl_pips=sl_pips,
+                spread_pips=spread_pips,
+                info=info,
+            )
+            ratio_floor = float(max(0.5, getattr(settings, "tp_sl_ratio_floor", 0.9)))
+            tp_pips = max(tp_pips, sl_pips * ratio_floor)
+        else:
+            tp_pips = max(tp_pips_cfg, sl_pips * float(getattr(settings, "min_tp_sl_ratio_enforced", 1.6)))
 
         sl_distance = sl_pips * info.point * 10
         tp_distance = tp_pips * info.point * 10
 
         sl = price - sl_distance if is_buy else price + sl_distance
         tp = price + tp_distance if is_buy else price - tp_distance
+
+        trail_pips = float(getattr(decision, "trailing_stop_pips_override", 0.0) or 0.0)
+        if trail_pips <= 0.0:
+            trail_pips = float(settings.trailing_stop_pips)
+        trail_act_pips = float(getattr(decision, "trailing_activation_pips_override", 0.0) or 0.0)
+        if trail_act_pips <= 0.0:
+            trail_act_pips = float(getattr(settings, "trailing_activation_pips", 0.0))
+        if trail_act_pips <= 0.0:
+            trail_act_pips = trail_pips
+
+        comment = f"ea|c{decision.confidence:.2f}|ts{trail_pips:.2f}|ta{trail_act_pips:.2f}"
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -109,7 +152,7 @@ class MT5Executor:
             "tp": tp,
             "deviation": 20,
             "magic": 920260311,
-            "comment": f"econ_ai_{decision.confidence:.2f}",
+            "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
@@ -142,15 +185,39 @@ class MT5Executor:
         if info is None or tick is None:
             return
 
-        trail_distance = settings.trailing_stop_pips * info.point * 10
+        pip_size = self._pip_size_from_info(info)
+        default_trail_pips = float(settings.trailing_stop_pips)
+        activation_pips_cfg = float(getattr(settings, "trailing_activation_pips", 0.0))
+        default_activation_pips = activation_pips_cfg if activation_pips_cfg > 0 else default_trail_pips
+        be_offset = float(getattr(settings, "trailing_break_even_offset_pips", 0.2)) * pip_size
 
         for pos in positions:
             is_buy = pos.type == mt5.POSITION_TYPE_BUY
             current_price = tick.bid if is_buy else tick.ask
+            trail_pips, activation_pips = self._extract_trailing_profile(
+                str(getattr(pos, "comment", "")),
+                default_trail_pips,
+                default_activation_pips,
+            )
+            trail_distance = trail_pips * pip_size
+
+            entry_price = float(getattr(pos, "price_open", current_price))
+            if is_buy:
+                profit_pips = (current_price - entry_price) / max(1e-12, pip_size)
+            else:
+                profit_pips = (entry_price - current_price) / max(1e-12, pip_size)
+            if profit_pips < activation_pips:
+                continue
 
             target_sl = current_price - trail_distance if is_buy else current_price + trail_distance
 
-            should_update = (is_buy and target_sl > pos.sl) or ((not is_buy) and (pos.sl == 0 or target_sl < pos.sl))
+            if is_buy:
+                target_sl = max(target_sl, entry_price + be_offset)
+            else:
+                target_sl = min(target_sl, entry_price - be_offset)
+
+            current_sl = float(getattr(pos, "sl", 0.0))
+            should_update = (is_buy and target_sl > current_sl) or ((not is_buy) and (current_sl == 0 or target_sl < current_sl))
             if not should_update:
                 continue
 
@@ -162,6 +229,70 @@ class MT5Executor:
                 "tp": pos.tp,
             }
             mt5.order_send(modify_request)
+
+    @staticmethod
+    def _extract_trailing_profile(comment: str, default_trail_pips: float, default_activation_pips: float) -> tuple[float, float]:
+        trail = float(default_trail_pips)
+        activation = float(default_activation_pips)
+        txt = str(comment or "")
+        if not txt:
+            return trail, activation
+        for token in txt.split("|"):
+            tk = token.strip().lower()
+            if tk.startswith("ts"):
+                try:
+                    v = float(tk.replace("ts", "", 1))
+                    if v > 0:
+                        trail = v
+                except Exception:
+                    pass
+            elif tk.startswith("ta"):
+                try:
+                    v = float(tk.replace("ta", "", 1))
+                    if v > 0:
+                        activation = v
+                except Exception:
+                    pass
+        if activation <= 0:
+            activation = trail
+        return trail, activation
+
+    @staticmethod
+    def _pip_size_from_info(info) -> float:
+        digits = int(getattr(info, "digits", 5))
+        point = float(getattr(info, "point", 0.00001))
+        return point * 10.0 if digits in {3, 5} else point
+
+    def _adaptive_take_profit_pips(self, symbol: str, decision: TradeDecision, sl_pips: float, spread_pips: float, info) -> float:
+        min_pips = float(max(0.5, getattr(settings, "take_profit_min_pips", 4.0)))
+        max_pips = float(max(min_pips, getattr(settings, "take_profit_max_pips", 12.0)))
+        base_pips = float(np.clip(getattr(settings, "take_profit_pips", 8.0), min_pips, max_pips))
+
+        confidence = float(np.clip(getattr(decision, "confidence", 0.5), 0.5, 0.99))
+        conf_scale = float((confidence - 0.5) / 0.49)
+        conf_bonus = float(np.clip(conf_scale, 0.0, 1.0)) * float(getattr(settings, "take_profit_confidence_bonus_pips", 2.0))
+
+        vol_seconds = int(max(60, getattr(settings, "take_profit_volatility_seconds", 300)))
+        vol_mult = float(max(0.2, getattr(settings, "take_profit_volatility_multiplier", 1.2)))
+
+        vol_component = 0.0
+        try:
+            ticks = self.get_recent_ticks(symbol, seconds=vol_seconds)
+            if ticks is not None and not ticks.empty and {"bid", "ask"}.issubset(set(ticks.columns)):
+                mid = (ticks["bid"].astype(float) + ticks["ask"].astype(float)) / 2.0
+                if len(mid) >= 20:
+                    pip_size = self._pip_size_from_info(info)
+                    range_pips = float((mid.max() - mid.min()) / max(1e-12, pip_size))
+                    vol_component = float(np.clip(0.35 * range_pips * vol_mult, min_pips, max_pips))
+        except Exception:
+            vol_component = 0.0
+
+        target = max(base_pips, vol_component)
+        # Penalize high spread environments so TP can be reached before mean reversion.
+        target -= max(0.0, spread_pips - 1.0) * 0.4
+        target += conf_bonus
+
+        return float(np.clip(target, min_pips, max_pips))
 
     def count_open_positions(self, symbol: str) -> int:
         positions = mt5.positions_get(symbol=symbol)

@@ -595,6 +595,18 @@ class DrivenTradingAgenticSystem(Strategy):
         self.regime_vol_low = float(max(0.01, getattr(settings, "driven_regime_vol_low_pips", 0.09)))
         self.regime_vol_high = float(max(self.regime_vol_low + 0.01, getattr(settings, "driven_regime_vol_high_pips", 0.45)))
         self.regime_trend_strength_pips = float(max(0.2, getattr(settings, "driven_regime_trend_strength_pips", 1.8)))
+        self.regime_tp_low_vol_pips = float(getattr(settings, "driven_regime_tp_low_vol_pips", 3.2))
+        self.regime_tp_mean_rev_pips = float(getattr(settings, "driven_regime_tp_mean_rev_pips", 4.2))
+        self.regime_tp_trend_pips = float(getattr(settings, "driven_regime_tp_trend_pips", 6.0))
+        self.regime_tp_high_vol_pips = float(getattr(settings, "driven_regime_tp_high_vol_pips", 7.0))
+        self.regime_tp_event_risk_pips = float(getattr(settings, "driven_regime_tp_event_risk_pips", 3.6))
+        self.regime_tp_confidence_bonus_pips = float(getattr(settings, "driven_regime_tp_confidence_bonus_pips", 1.0))
+        self.regime_tp_spread_penalty_factor = float(getattr(settings, "driven_regime_tp_spread_penalty_factor", 0.35))
+        self.regime_trail_ratio = float(getattr(settings, "driven_regime_trail_ratio", 0.55))
+        self.regime_trail_activation_ratio = float(getattr(settings, "driven_regime_trail_activation_ratio", 0.45))
+        self.regime_trail_min_pips = float(getattr(settings, "driven_regime_trail_min_pips", 1.2))
+        self.take_profit_min_pips = float(max(0.5, getattr(settings, "take_profit_min_pips", 3.0)))
+        self.take_profit_max_pips = float(max(self.take_profit_min_pips, getattr(settings, "take_profit_max_pips", 8.0)))
 
         self.state_path = Path(str(getattr(settings, "driven_state_path", "models/driven_agentic_state.json")))
         self.pending_trades: list[dict[str, Any]] = []
@@ -1008,6 +1020,46 @@ class DrivenTradingAgenticSystem(Strategy):
 
         return decision
 
+    def _apply_regime_exit_profile(self, decision: TradeDecision, regime: dict[str, Any], spread_pips: float) -> TradeDecision:
+        regime_name = str(regime.get("name", "unknown"))
+        tp_map = {
+            "low_volatility": self.regime_tp_low_vol_pips,
+            "mean_reversion": self.regime_tp_mean_rev_pips,
+            "trend": self.regime_tp_trend_pips,
+            "high_volatility": self.regime_tp_high_vol_pips,
+            "event_risk": self.regime_tp_event_risk_pips,
+        }
+        base_tp = float(tp_map.get(regime_name, tp_map["mean_reversion"]))
+
+        conf_bonus = self.regime_tp_confidence_bonus_pips
+        confidence = float(np.clip(getattr(decision, "confidence", 0.5), 0.5, 0.99))
+        bonus = ((confidence - 0.5) / 0.49) * conf_bonus
+
+        spread_pen_factor = float(max(0.0, self.regime_tp_spread_penalty_factor))
+        spread_penalty = max(0.0, spread_pips - 1.0) * spread_pen_factor
+
+        tp_min = self.take_profit_min_pips
+        tp_max = self.take_profit_max_pips
+        tp_pips = float(np.clip(base_tp + bonus - spread_penalty, tp_min, tp_max))
+
+        trail_ratio = float(np.clip(self.regime_trail_ratio, 0.25, 1.0))
+        trail_act_ratio = float(np.clip(self.regime_trail_activation_ratio, 0.20, 1.0))
+        trail_min = float(max(0.5, self.regime_trail_min_pips))
+        trail_pips = float(max(trail_min, tp_pips * trail_ratio))
+        trail_activation = float(max(trail_min, tp_pips * trail_act_ratio))
+
+        decision.tp_pips_override = tp_pips
+        decision.trailing_stop_pips_override = trail_pips
+        decision.trailing_activation_pips_override = trail_activation
+        self._last_llm_meta["exit_profile"] = {
+            "regime": regime_name,
+            "tp_pips": round(tp_pips, 3),
+            "trail_pips": round(trail_pips, 3),
+            "trail_activation_pips": round(trail_activation, 3),
+            "spread_pips": round(float(spread_pips), 3),
+        }
+        return decision
+
     def decide(self, event_row, ticks, bundle, tabular_models, lstm_model, feature_columns, policy, settings):
         if ticks is None or ticks.empty:
             self._last_reject_reason = "ticks_empty"
@@ -1112,6 +1164,8 @@ class DrivenTradingAgenticSystem(Strategy):
         if float(decision.confidence) < threshold:
             self._last_reject_reason = "threshold_guard"
             return None
+
+        decision = self._apply_regime_exit_profile(decision=decision, regime=self._current_regime, spread_pips=spread_pips)
 
         if (
             self.signal_cooldown_seconds > 0

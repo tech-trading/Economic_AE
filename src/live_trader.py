@@ -290,7 +290,7 @@ class LiveTrader:
             llm_txt = f"llm_used={llm.get('llm_used', False)};llm_side={llm.get('llm_side', '')};llm_conf={float(llm.get('llm_confidence', 0.0)):.2f}"
             ep = llm.get("exit_profile", {}) if isinstance(llm, dict) else {}
             if isinstance(ep, dict) and ep:
-                llm_txt = llm_txt + f";tp={ep.get('tp_pips', '')};trail={ep.get('trail_pips', '')};ta={ep.get('trail_activation_pips', '')}"
+                llm_txt = llm_txt + f";sl={ep.get('sl_pips', '')};tp={ep.get('tp_pips', '')};trail={ep.get('trail_pips', '')};ta={ep.get('trail_activation_pips', '')}"
 
         reject_reason = str(st.get("last_reject_reason", "")).strip()
         reject_txt = f"reject_reason={reject_reason}" if reject_reason else ""

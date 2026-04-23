@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import re
 
 import MetaTrader5 as mt5
 import numpy as np
@@ -15,6 +16,7 @@ class TradeDecision:
     side: str
     confidence: float
     proba_buy: float = 0.5
+    sl_pips_override: float | None = None
     tp_pips_override: float | None = None
     trailing_stop_pips_override: float | None = None
     trailing_activation_pips_override: float | None = None
@@ -102,7 +104,22 @@ class MT5Executor:
 
         sl_pips_cfg = float(settings.stop_loss_pips)
         tp_pips_cfg = float(settings.take_profit_pips)
-        sl_pips = max(sl_pips_cfg, spread_pips * float(getattr(settings, "min_sl_spread_multiplier", 3.0)))
+        sl_override = float(getattr(decision, "sl_pips_override", 0.0) or 0.0)
+        if sl_override > 0.0:
+            sl_pips = sl_override
+            sl_pips = float(np.clip(sl_pips, float(getattr(settings, "stop_loss_min_pips", 1.0)), float(getattr(settings, "stop_loss_max_pips", 20.0))))
+        else:
+            sl_mode = str(getattr(settings, "stop_loss_mode", "adaptive")).strip().lower()
+            if sl_mode == "adaptive":
+                sl_pips = self._adaptive_stop_loss_pips(
+                    symbol=symbol,
+                    decision=decision,
+                    spread_pips=spread_pips,
+                    info=info,
+                )
+            else:
+                sl_pips = sl_pips_cfg
+        sl_pips = max(sl_pips, spread_pips * float(getattr(settings, "min_sl_spread_multiplier", 3.0)))
         tp_override = float(getattr(decision, "tp_pips_override", 0.0) or 0.0)
 
         tp_mode = str(getattr(settings, "take_profit_mode", "adaptive")).strip().lower()
@@ -140,7 +157,13 @@ class MT5Executor:
         if trail_act_pips <= 0.0:
             trail_act_pips = trail_pips
 
-        comment = f"ea|c{decision.confidence:.2f}|ts{trail_pips:.2f}|ta{trail_act_pips:.2f}"
+        comment = self._build_order_comment(
+            confidence=float(decision.confidence),
+            sl_pips=float(sl_pips),
+            tp_pips=float(tp_pips),
+            trail_pips=float(trail_pips),
+            trail_act_pips=float(trail_act_pips),
+        )
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -237,7 +260,8 @@ class MT5Executor:
         txt = str(comment or "")
         if not txt:
             return trail, activation
-        for token in txt.split("|"):
+        tokens = [tk for tk in re.split(r"[|_]", txt) if tk]
+        for token in tokens:
             tk = token.strip().lower()
             if tk.startswith("ts"):
                 try:
@@ -253,9 +277,35 @@ class MT5Executor:
                         activation = v
                 except Exception:
                     pass
+            elif tk.startswith("t"):
+                try:
+                    v = float(tk.replace("t", "", 1)) / 10.0
+                    if v > 0:
+                        trail = v
+                except Exception:
+                    pass
+            elif tk.startswith("a"):
+                try:
+                    v = float(tk.replace("a", "", 1)) / 10.0
+                    if v > 0:
+                        activation = v
+                except Exception:
+                    pass
         if activation <= 0:
             activation = trail
         return trail, activation
+
+    @staticmethod
+    def _build_order_comment(confidence: float, sl_pips: float, tp_pips: float, trail_pips: float, trail_act_pips: float) -> str:
+        # MT5 comments are broker-limited (commonly 31 chars), so keep compact ASCII.
+        c = int(np.clip(round(confidence * 100.0), 0, 99))
+        s = int(np.clip(round(sl_pips * 10.0), 0, 999))
+        p = int(np.clip(round(tp_pips * 10.0), 0, 999))
+        t = int(np.clip(round(trail_pips * 10.0), 0, 999))
+        a = int(np.clip(round(trail_act_pips * 10.0), 0, 999))
+        raw = f"ea_c{c}_s{s}_p{p}_t{t}_a{a}"
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+        return safe[:31]
 
     @staticmethod
     def _pip_size_from_info(info) -> float:
@@ -292,6 +342,35 @@ class MT5Executor:
         target -= max(0.0, spread_pips - 1.0) * 0.4
         target += conf_bonus
 
+        return float(np.clip(target, min_pips, max_pips))
+
+    def _adaptive_stop_loss_pips(self, symbol: str, decision: TradeDecision, spread_pips: float, info) -> float:
+        min_pips = float(max(0.6, getattr(settings, "stop_loss_min_pips", 2.2)))
+        max_pips = float(max(min_pips, getattr(settings, "stop_loss_max_pips", 7.5)))
+        base_pips = float(np.clip(getattr(settings, "stop_loss_pips", 4.0), min_pips, max_pips))
+
+        confidence = float(np.clip(getattr(decision, "confidence", 0.5), 0.5, 0.99))
+        conf_scale = float((confidence - 0.5) / 0.49)
+        conf_bonus = float(np.clip(conf_scale, 0.0, 1.0)) * float(getattr(settings, "stop_loss_confidence_bonus_pips", 0.7))
+
+        vol_seconds = int(max(60, getattr(settings, "stop_loss_volatility_seconds", 300)))
+        vol_mult = float(max(0.2, getattr(settings, "stop_loss_volatility_multiplier", 1.0)))
+
+        vol_component = 0.0
+        try:
+            ticks = self.get_recent_ticks(symbol, seconds=vol_seconds)
+            if ticks is not None and not ticks.empty and {"bid", "ask"}.issubset(set(ticks.columns)):
+                mid = (ticks["bid"].astype(float) + ticks["ask"].astype(float)) / 2.0
+                if len(mid) >= 20:
+                    pip_size = self._pip_size_from_info(info)
+                    range_pips = float((mid.max() - mid.min()) / max(1e-12, pip_size))
+                    vol_component = float(np.clip(0.30 * range_pips * vol_mult, min_pips, max_pips))
+        except Exception:
+            vol_component = 0.0
+
+        target = max(base_pips, vol_component)
+        target += max(0.0, spread_pips - 1.0) * 0.25
+        target += conf_bonus * 0.5
         return float(np.clip(target, min_pips, max_pips))
 
     def count_open_positions(self, symbol: str) -> int:

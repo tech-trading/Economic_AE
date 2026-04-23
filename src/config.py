@@ -24,6 +24,12 @@ class Settings:
     max_spread_points: int = int(os.getenv("MAX_SPREAD_POINTS", "25"))
 
     stop_loss_pips: float = float(os.getenv("STOP_LOSS_PIPS", "12"))
+    stop_loss_mode: str = os.getenv("STOP_LOSS_MODE", "adaptive")  # fixed, adaptive
+    stop_loss_min_pips: float = float(os.getenv("STOP_LOSS_MIN_PIPS", "2.2"))
+    stop_loss_max_pips: float = float(os.getenv("STOP_LOSS_MAX_PIPS", "7.5"))
+    stop_loss_volatility_seconds: int = int(os.getenv("STOP_LOSS_VOLATILITY_SECONDS", "300"))
+    stop_loss_volatility_multiplier: float = float(os.getenv("STOP_LOSS_VOLATILITY_MULTIPLIER", "1.0"))
+    stop_loss_confidence_bonus_pips: float = float(os.getenv("STOP_LOSS_CONFIDENCE_BONUS_PIPS", "0.7"))
     take_profit_pips: float = float(os.getenv("TAKE_PROFIT_PIPS", "24"))
     take_profit_mode: str = os.getenv("TAKE_PROFIT_MODE", "adaptive")  # fixed, adaptive
     take_profit_min_pips: float = float(os.getenv("TAKE_PROFIT_MIN_PIPS", "3.0"))
@@ -193,6 +199,14 @@ class Settings:
     driven_regime_trail_ratio: float = float(os.getenv("DRIVEN_REGIME_TRAIL_RATIO", "0.55"))
     driven_regime_trail_activation_ratio: float = float(os.getenv("DRIVEN_REGIME_TRAIL_ACTIVATION_RATIO", "0.45"))
     driven_regime_trail_min_pips: float = float(os.getenv("DRIVEN_REGIME_TRAIL_MIN_PIPS", "1.2"))
+    driven_regime_sl_low_vol_pips: float = float(os.getenv("DRIVEN_REGIME_SL_LOW_VOL_PIPS", "2.4"))
+    driven_regime_sl_mean_rev_pips: float = float(os.getenv("DRIVEN_REGIME_SL_MEAN_REV_PIPS", "3.0"))
+    driven_regime_sl_trend_pips: float = float(os.getenv("DRIVEN_REGIME_SL_TREND_PIPS", "3.8"))
+    driven_regime_sl_high_vol_pips: float = float(os.getenv("DRIVEN_REGIME_SL_HIGH_VOL_PIPS", "4.8"))
+    driven_regime_sl_event_risk_pips: float = float(os.getenv("DRIVEN_REGIME_SL_EVENT_RISK_PIPS", "2.8"))
+    driven_regime_sl_confidence_bonus_pips: float = float(os.getenv("DRIVEN_REGIME_SL_CONFIDENCE_BONUS_PIPS", "0.6"))
+    driven_regime_sl_spread_penalty_factor: float = float(os.getenv("DRIVEN_REGIME_SL_SPREAD_PENALTY_FACTOR", "0.30"))
+    driven_regime_min_rr: float = float(os.getenv("DRIVEN_REGIME_MIN_RR", "1.05"))
 
     # Runtime agent framework (agents/trading/*.md)
     agent_runtime_enabled: bool = os.getenv("AGENT_RUNTIME_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}

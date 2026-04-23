@@ -605,6 +605,16 @@ class DrivenTradingAgenticSystem(Strategy):
         self.regime_trail_ratio = float(getattr(settings, "driven_regime_trail_ratio", 0.55))
         self.regime_trail_activation_ratio = float(getattr(settings, "driven_regime_trail_activation_ratio", 0.45))
         self.regime_trail_min_pips = float(getattr(settings, "driven_regime_trail_min_pips", 1.2))
+        self.regime_sl_low_vol_pips = float(getattr(settings, "driven_regime_sl_low_vol_pips", 2.4))
+        self.regime_sl_mean_rev_pips = float(getattr(settings, "driven_regime_sl_mean_rev_pips", 3.0))
+        self.regime_sl_trend_pips = float(getattr(settings, "driven_regime_sl_trend_pips", 3.8))
+        self.regime_sl_high_vol_pips = float(getattr(settings, "driven_regime_sl_high_vol_pips", 4.8))
+        self.regime_sl_event_risk_pips = float(getattr(settings, "driven_regime_sl_event_risk_pips", 2.8))
+        self.regime_sl_confidence_bonus_pips = float(getattr(settings, "driven_regime_sl_confidence_bonus_pips", 0.6))
+        self.regime_sl_spread_penalty_factor = float(getattr(settings, "driven_regime_sl_spread_penalty_factor", 0.30))
+        self.regime_min_rr = float(getattr(settings, "driven_regime_min_rr", 1.05))
+        self.stop_loss_min_pips = float(max(0.6, getattr(settings, "stop_loss_min_pips", 2.2)))
+        self.stop_loss_max_pips = float(max(self.stop_loss_min_pips, getattr(settings, "stop_loss_max_pips", 7.5)))
         self.take_profit_min_pips = float(max(0.5, getattr(settings, "take_profit_min_pips", 3.0)))
         self.take_profit_max_pips = float(max(self.take_profit_min_pips, getattr(settings, "take_profit_max_pips", 8.0)))
 
@@ -1031,16 +1041,33 @@ class DrivenTradingAgenticSystem(Strategy):
         }
         base_tp = float(tp_map.get(regime_name, tp_map["mean_reversion"]))
 
+        sl_map = {
+            "low_volatility": self.regime_sl_low_vol_pips,
+            "mean_reversion": self.regime_sl_mean_rev_pips,
+            "trend": self.regime_sl_trend_pips,
+            "high_volatility": self.regime_sl_high_vol_pips,
+            "event_risk": self.regime_sl_event_risk_pips,
+        }
+        base_sl = float(sl_map.get(regime_name, sl_map["mean_reversion"]))
+
         conf_bonus = self.regime_tp_confidence_bonus_pips
         confidence = float(np.clip(getattr(decision, "confidence", 0.5), 0.5, 0.99))
         bonus = ((confidence - 0.5) / 0.49) * conf_bonus
 
+        sl_conf_bonus = ((confidence - 0.5) / 0.49) * self.regime_sl_confidence_bonus_pips
+
         spread_pen_factor = float(max(0.0, self.regime_tp_spread_penalty_factor))
         spread_penalty = max(0.0, spread_pips - 1.0) * spread_pen_factor
+
+        sl_spread_penalty = max(0.0, spread_pips - 1.0) * float(max(0.0, self.regime_sl_spread_penalty_factor))
+
+        sl_pips = float(np.clip(base_sl + sl_conf_bonus + sl_spread_penalty, self.stop_loss_min_pips, self.stop_loss_max_pips))
 
         tp_min = self.take_profit_min_pips
         tp_max = self.take_profit_max_pips
         tp_pips = float(np.clip(base_tp + bonus - spread_penalty, tp_min, tp_max))
+        tp_pips = max(tp_pips, sl_pips * max(0.0, self.regime_min_rr))
+        tp_pips = float(np.clip(tp_pips, tp_min, tp_max))
 
         trail_ratio = float(np.clip(self.regime_trail_ratio, 0.25, 1.0))
         trail_act_ratio = float(np.clip(self.regime_trail_activation_ratio, 0.20, 1.0))
@@ -1048,11 +1075,13 @@ class DrivenTradingAgenticSystem(Strategy):
         trail_pips = float(max(trail_min, tp_pips * trail_ratio))
         trail_activation = float(max(trail_min, tp_pips * trail_act_ratio))
 
+        decision.sl_pips_override = sl_pips
         decision.tp_pips_override = tp_pips
         decision.trailing_stop_pips_override = trail_pips
         decision.trailing_activation_pips_override = trail_activation
         self._last_llm_meta["exit_profile"] = {
             "regime": regime_name,
+            "sl_pips": round(sl_pips, 3),
             "tp_pips": round(tp_pips, 3),
             "trail_pips": round(trail_pips, 3),
             "trail_activation_pips": round(trail_activation, 3),

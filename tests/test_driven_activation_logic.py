@@ -176,8 +176,10 @@ class DrivenActivationLogicTest(unittest.TestCase):
         self.assertIsNotNone(decision)
         assert decision is not None
         self.assertIsNotNone(decision.tp_pips_override)
+        self.assertIsNotNone(decision.sl_pips_override)
         self.assertIsNotNone(decision.trailing_stop_pips_override)
         self.assertIsNotNone(decision.trailing_activation_pips_override)
+        self.assertGreater(float(decision.sl_pips_override), 0.0)
         self.assertGreater(float(decision.tp_pips_override), 0.0)
 
 

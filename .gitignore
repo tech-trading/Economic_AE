@@ -29,5 +29,8 @@ data/event_windows_summary.csv
 models/event_dataset*.npz
 models/event_lstm.h5
 
+# Auto-generated environment backups
+models/.env.bak*
+
 # Local environment secrets
 .env

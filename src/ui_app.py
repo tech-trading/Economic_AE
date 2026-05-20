@@ -38,6 +38,7 @@ from src.ui.live_ops import (
     load_live_mt5_trades as load_live_mt5_trades_impl,
     render_live_status_panel as render_live_status_panel_impl,
     start_live_bot_process as start_live_bot_process_impl,
+    stop_active_project_tasks as stop_active_project_tasks_impl,
     stop_live_bot_process as stop_live_bot_process_impl,
     verify_mt5_connection as verify_mt5_connection_impl,
 )
@@ -153,6 +154,10 @@ def start_live_bot_process() -> tuple[bool, str]:
 
 def stop_live_bot_process() -> tuple[bool, str]:
     return stop_live_bot_process_impl(LIVE_PID_PATH)
+
+
+def stop_active_project_tasks(close_ui: bool = False) -> tuple[bool, str]:
+    return stop_active_project_tasks_impl(PROJECT_ROOT, LIVE_PID_PATH, close_ui=close_ui)
 
 
 def verify_mt5_connection() -> tuple[bool, str]:
@@ -1599,6 +1604,16 @@ def main() -> None:
             ok, msg = stop_live_bot_process()
             (st.success if ok else st.warning)(msg)
             st.rerun()
+
+        st.markdown("### Cierre rápido")
+        c_all, c_ui = st.columns(2)
+        if c_all.button("Cerrar tareas activas", help="Detiene bot LIVE y procesos Python del proyecto (sin cerrar esta UI)."):
+            ok, msg = stop_active_project_tasks(close_ui=False)
+            (st.success if ok else st.warning)(msg)
+            st.rerun()
+        if c_ui.button("Cerrar programa y tareas", help="Detiene tareas activas del proyecto y cierra esta ventana de Streamlit."):
+            ok, msg = stop_active_project_tasks(close_ui=True)
+            (st.success if ok else st.warning)(msg)
 
         st.markdown("### Comando de arranque LIVE")
         st.code("$env:PAPER_TRADING='false'; .\\.venv\\Scripts\\python.exe -m src.main")

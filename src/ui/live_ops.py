@@ -181,14 +181,15 @@ def _is_pid_running(pid: int) -> bool:
         return False
 
 
-def _iter_windows_src_main_pids(project_root: Path) -> Iterable[int]:
+def _iter_windows_project_python_pids(project_root: Path, required_tokens: Iterable[str]) -> Iterable[int]:
     if os.name != "nt":
         return []
 
     project_marker = str(project_root).lower().replace("/", "\\")
+    tokens = [str(token).lower().replace("/", "\\") for token in required_tokens]
     cmd = (
         "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'src.main' } | "
+        "Where-Object { $_.Name -match 'python' } | "
         "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
     )
 
@@ -209,11 +210,34 @@ def _iter_windows_src_main_pids(project_root: Path) -> Iterable[int]:
         for row in rows:
             cmdline = str(row.get("CommandLine") or "").lower().replace("/", "\\")
             pid = int(row.get("ProcessId") or 0)
-            if pid > 0 and project_marker in cmdline and "-m src.main" in cmdline:
+            if pid > 0 and project_marker in cmdline and all(token in cmdline for token in tokens):
                 pids.append(pid)
         return sorted(set(pids), reverse=True)
     except Exception:
         return []
+
+
+def _iter_windows_src_main_pids(project_root: Path) -> Iterable[int]:
+    return _iter_windows_project_python_pids(project_root, ["-m src.main"])
+
+
+def _iter_windows_ui_app_pids(project_root: Path) -> Iterable[int]:
+    return _iter_windows_project_python_pids(project_root, ["-m streamlit", "src\\ui_app.py"])
+
+
+def _schedule_self_shutdown(pid: int, delay_ms: int = 1200) -> None:
+    if pid <= 0:
+        return
+    if os.name == "nt":
+        cmd = f"Start-Sleep -Milliseconds {int(delay_ms)}; taskkill /PID {int(pid)} /T /F"
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+    os.kill(pid, signal.SIGTERM)
 
 
 def get_live_bot_pid(live_pid_path: Path) -> int | None:
@@ -316,6 +340,57 @@ def stop_live_bot_process(live_pid_path: Path) -> tuple[bool, str]:
         return True, f"Bot LIVE detenido (PID {pid})."
     except Exception as ex:
         return False, f"No se pudo detener el bot LIVE: {ex}"
+
+
+def stop_active_project_tasks(project_root: Path, live_pid_path: Path, *, close_ui: bool = False) -> tuple[bool, str]:
+    target_pids: set[int] = set(_iter_windows_src_main_pids(project_root))
+    if close_ui:
+        target_pids.update(_iter_windows_ui_app_pids(project_root))
+
+    current_pid = int(os.getpid())
+    stopped: list[int] = []
+    failed: list[str] = []
+
+    for pid in sorted(target_pids):
+        if pid <= 0:
+            continue
+        if close_ui and pid == current_pid:
+            continue
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            stopped.append(pid)
+        except Exception as ex:
+            failed.append(f"PID {pid}: {ex}")
+
+    self_shutdown_scheduled = False
+    if close_ui and (current_pid in target_pids):
+        try:
+            _schedule_self_shutdown(current_pid)
+            self_shutdown_scheduled = True
+        except Exception as ex:
+            failed.append(f"PID {current_pid}: {ex}")
+
+    if live_pid_path.exists():
+        try:
+            live_pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if (not stopped) and (not self_shutdown_scheduled):
+        return False, "No se detectaron tareas activas del proyecto para cerrar."
+
+    parts: list[str] = []
+    if stopped:
+        parts.append(f"Tareas cerradas: {', '.join(str(pid) for pid in stopped)}")
+    if self_shutdown_scheduled:
+        parts.append("Cierre de esta UI programado en ~1 segundo")
+    if failed:
+        parts.append(f"No se pudieron cerrar algunas tareas ({'; '.join(failed[:3])})")
+
+    return True, ". ".join(parts)
 
 
 def verify_mt5_connection() -> tuple[bool, str]:
